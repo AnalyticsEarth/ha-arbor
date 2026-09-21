@@ -259,6 +259,52 @@ class TestContentFollowingIsBounded(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(portal.requested.count("/loop"), 1)
 
 
+class TestEmptyIsNotTheSameAsMissing(unittest.IsolatedAsyncioTestCase):
+    """A child with no homework due really has none.
+
+    Reporting that the same way as "no page found" sent me looking for a parser
+    bug that did not exist.
+    """
+
+    async def asyncSetUp(self) -> None:
+        empty_assignments = {
+            "type": "page",
+            "content": [
+                {
+                    "xtype": "mis-section",
+                    "props": {
+                        "title": "Assignments",
+                        "hiddenRowsCount": 0,
+                        "emptyText": "There are no assignments to display",
+                    },
+                }
+            ],
+        }
+        self.portal = FakePortal(
+            {
+                "/guardians/home-ui/dashboard": pages.WROTHAM_SHAPED_DASHBOARD,
+                "/guardians/student-profile/index/student-id/40219": pages.PROFILE_PAGE,
+                "/guardians/assignments/index/student-id/40219": empty_assignments,
+                "/auth/current-user-settings/format/json": pages.CURRENT_USER_SETTINGS,
+            }
+        )
+        runner = scraper_module.ArborScraper(self.portal.fetch, self.portal.fetch)
+        self.data = await runner.async_scrape()
+        self.student = self.data.students["40219"]
+
+    def test_assignments_are_empty(self) -> None:
+        self.assertEqual(self.student.assignments, [])
+        self.assertIn("assignments", self.student.empty_domains)
+
+    def test_but_assignments_were_sourced(self) -> None:
+        self.assertIn("assignments", self.student.sourced_domains)
+        self.assertNotIn("assignments", self.student.unsourced_domains)
+
+    def test_a_domain_with_no_page_is_unsourced(self) -> None:
+        # Nothing served behaviour, so it is a genuine gap rather than "none".
+        self.assertIn("behaviour", self.student.unsourced_domains)
+
+
 class TestWrothamShapedPortal(unittest.IsolatedAsyncioTestCase):
     """The architecture a real school actually serves.
 

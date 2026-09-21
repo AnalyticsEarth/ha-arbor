@@ -635,8 +635,14 @@ def report(data: Any, show_values: bool) -> None:
         )
         print(f"   grades            {len(student.grades)}")
         print(f"   notices           {len(student.notices)}")
-        if student.empty_domains:
-            print(f"   EMPTY             {', '.join(sorted(student.empty_domains))}")
+        # A sourced-but-empty domain is usually right: no homework due really is
+        # none. An unsourced one means no page was found, which is a gap.
+        quiet = sorted(student.empty_domains & student.sourced_domains)
+        missing = sorted(student.unsourced_domains)
+        if quiet:
+            print(f"   none reported     {', '.join(quiet)}  (page read, nothing in it)")
+        if missing:
+            print(f"   NO SOURCE         {', '.join(missing)}  (no page found to read)")
         print(f"   pages scraped     {len(student.raw)}")
         for key in sorted(student.raw):
             print(f"     - {key}")
@@ -686,11 +692,11 @@ async def cmd_report(client: UrllibArborClient, args: argparse.Namespace) -> int
         print("\nrefused by Arbor for this account:")
         for key in sorted(scraper.unavailable):
             print(f"  - {key}")
-    empty = [s for s in data.students.values() if s.empty_domains]
-    if empty:
+    unsourced = [s for s in data.students.values() if s.unsourced_domains]
+    if unsourced:
         print(
-            "\nSome domains are empty. Run:  "
-            f"python3 {sys.argv[0]} shape <path> --email {args.email}",
+            "\nSome domains have no page to read. Send the shape dump:\n"
+            f"    python3 {sys.argv[0]} shapes --email {args.email} > shapes.txt",
             file=sys.stderr,
         )
     return 0

@@ -177,8 +177,17 @@ class StudentData:
 
     # Raw per-domain page trees, kept for diagnostics and the dump_page service.
     raw: dict[str, object] = field(default_factory=dict)
-    # Domains that were discovered but produced no usable data.
+    # Domains a page was successfully read for. A domain that is sourced but
+    # empty is usually correct -- a child with no homework due really has none --
+    # whereas an unsourced domain means no page was found to read.
+    sourced_domains: set[str] = field(default_factory=set)
+    # Domains that produced no usable data, sourced or not.
     empty_domains: set[str] = field(default_factory=set)
+
+    @property
+    def unsourced_domains(self) -> set[str]:
+        """Domains with no data *and* no page found to read it from."""
+        return self.empty_domains - self.sourced_domains
 
     @property
     def behaviour_points_net(self) -> float | None:

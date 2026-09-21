@@ -319,6 +319,7 @@ class ArborScraper:
                 if not fetched:
                     continue
                 resolved.setdefault(domain, {})[caption] = url
+                student.sourced_domains.add(domain)
                 trees[domain].extend(fetched)
                 for index, tree in enumerate(fetched):
                     label = caption if index == 0 else f"{caption} > content {index}"
@@ -432,6 +433,8 @@ class ArborScraper:
             student.empty_domains.add(DATA_BEHAVIOUR)
         if not student.lessons:
             student.empty_domains.add(DATA_TIMETABLE)
+        if calendar_trees:
+            student.sourced_domains.add(DATA_TIMETABLE)
 
     async def _calendar_trees(self, student: StudentData) -> list[Any]:
         """Calendar payloads for the coming week, if the portal serves them.

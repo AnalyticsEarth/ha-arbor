@@ -62,6 +62,8 @@ async def async_get_config_entry_diagnostics(
                     },
                     "pages_scraped": sorted(student.raw),
                     "empty_domains": sorted(student.empty_domains),
+                    "sourced_domains": sorted(student.sourced_domains),
+                    "unsourced_domains": sorted(student.unsourced_domains),
                 }
             )
 

@@ -71,6 +71,11 @@ Per child:
 Entities whose data your school does not publish stay `unknown` rather than
 disappearing, so an automation referencing them never breaks.
 
+An empty value is often correct rather than a fault: a child with no homework due
+really has none. `arbor_probe.py report` distinguishes the two — **none reported**
+means the page was read and held nothing, while **NO SOURCE** means no page was
+found to read, which is the case worth investigating. Diagnostics reports both.
+
 ### The summary entity
 
 Each child's device has one entity named after the child itself, carrying the

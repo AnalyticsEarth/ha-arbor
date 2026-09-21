@@ -9,7 +9,10 @@ nothing to install.
 
 Your password is never taken as an argument (it would land in your shell
 history) and never written anywhere. It is read from the ARBOR_PASSWORD
-environment variable if set, otherwise prompted for without echo.
+environment variable if set, otherwise prompted for without echo. To set it for
+a terminal session without recording it in history:
+
+    read -rs ARBOR_PASSWORD && export ARBOR_PASSWORD
 
     export ARBOR_SCHOOL=wrotham          # when the account has several schools
     python3 tools/arbor_probe.py report --email you@example.com
@@ -773,7 +776,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n{err}", file=sys.stderr)
         return 2
     except ArborAuthError as err:
-        print(f"\nauthentication failed: {err}", file=sys.stderr)
+        print(
+            f"\nauthentication failed: {err}\n\n"
+            "Check the password before retrying: Arbor locks an account after a few\n"
+            "failed attempts, and it answers a throttled login the same way it answers\n"
+            "a wrong one, so repeated guesses are worth avoiding.\n\n"
+            "To type it once per terminal instead of once per run, without putting it\n"
+            "in your shell history:\n"
+            "    read -rs ARBOR_PASSWORD && export ARBOR_PASSWORD",
+            file=sys.stderr,
+        )
         return 3
     except ArborNotAvailableError as err:
         print(f"\nnot available: {err}", file=sys.stderr)

@@ -85,6 +85,16 @@ class TestProbeToolIsPrivateByDefault(unittest.TestCase):
         self.assertEqual(self.probe._mask_name("Amelia Example", False), "A… E…")
         self.assertEqual(self.probe._mask_name("Amelia Example", True), "Amelia Example")
 
+    def test_the_auth_failure_path_warns_about_lockout(self) -> None:
+        """Arbor answers a throttled login the same way as a wrong password.
+
+        Checked against the source rather than by running main(), which would
+        prompt for a password and block.
+        """
+        source = Path(self.probe.__file__ or "").read_text()
+        self.assertIn("locks an account", source)
+        self.assertIn("read -rs ARBOR_PASSWORD", source)
+
     def test_there_is_no_password_argument(self) -> None:
         # A --password flag would be recorded in the user's shell history.
         actions = {
@@ -304,7 +314,11 @@ class TestRememberedSchool(unittest.TestCase):
     def test_forgetting_removes_the_file(self) -> None:
         self.probe.remember_school("a@b.c", "https://school.uk.arbor.education")
         self.assertTrue(self.config.exists())
-        self.probe.forget_schools()
+        import contextlib
+        import io
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.probe.forget_schools()
         self.assertFalse(self.config.exists())
 
     def test_forget_school_needs_no_command_or_email(self) -> None:

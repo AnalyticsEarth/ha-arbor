@@ -1,5 +1,9 @@
 # Arbor Education for Home Assistant
 
+[![HACS: custom repository](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://hacs.xyz/docs/faq/custom_repositories)
+[![Home Assistant 2024.11+](https://img.shields.io/badge/Home%20Assistant-2024.11%2B-41BDF5.svg?style=for-the-badge&logo=home-assistant&logoColor=white)](https://www.home-assistant.io)
+[![License: MIT](https://img.shields.io/github/license/AnalyticsEarth/ha-arbor.svg?style=for-the-badge)](LICENSE)
+
 A custom integration that brings your child's [Arbor](https://arbor-education.com)
 Parent Portal data into Home Assistant: attendance, behaviour points, homework,
 timetable, meal balance, grades and school notices.

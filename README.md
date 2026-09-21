@@ -234,9 +234,24 @@ differs; it uses the standard library, so there is nothing to install.
 python3 tools/arbor_probe.py report --email you@example.com
 ```
 
-It prompts for your password without echoing it. Set `ARBOR_PASSWORD` instead if
-you prefer. There is deliberately **no `--password` flag**: it would be recorded
-in your shell history.
+The password is taken from `$ARBOR_PASSWORD`, then from your macOS Keychain, and
+only then by prompting. There is deliberately **no `--password` flag**: it would
+be recorded in your shell history.
+
+Storing it once means no run ever has to ask again, which matters if you run this
+from anywhere that cannot type at a prompt:
+
+```bash
+security add-generic-password -a you@example.com -s arbor-probe -w
+```
+
+That prompts without echo and keeps the password in your Keychain. The script
+only ever **reads** it — it never writes to your Keychain. For a single terminal
+session instead:
+
+```bash
+read -rs ARBOR_PASSWORD && export ARBOR_PASSWORD
+```
 
 If your account covers children at more than one school it asks which one, once,
 and remembers your answer for next time:

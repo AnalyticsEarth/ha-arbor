@@ -123,6 +123,49 @@ class TestProbeToolIsPrivateByDefault(unittest.TestCase):
         self.assertIn("locks an account", source)
         self.assertIn("read -rs ARBOR_PASSWORD", source)
 
+    def test_the_keychain_is_only_ever_read(self) -> None:
+        """The user stores the password; the script must never write it."""
+        source = Path(self.probe.__file__ or "").read_text()
+        self.assertIn("find-generic-password", source)
+        self.assertNotIn("add-generic-password\",", source)
+        self.assertNotIn('"add-generic-password"', source)
+
+    def test_the_store_command_is_shown_not_run(self) -> None:
+        command = self.probe.keychain_store_command("a@b.c", "arbor-probe")
+        self.assertEqual(
+            command, "security add-generic-password -a a@b.c -s arbor-probe -w"
+        )
+        # -w with no value makes `security` prompt without echo.
+        self.assertTrue(command.endswith(" -w"))
+
+    def test_a_missing_keychain_entry_is_not_fatal(self) -> None:
+        self.assertIsNone(
+            self.probe.keychain_password(
+                "definitely-not-a-real-account@example.invalid", "arbor-probe-absent"
+            )
+        )
+
+    def test_no_password_and_no_terminal_explains_both_options(self) -> None:
+        import contextlib
+        import io
+        import os
+
+        previous = os.environ.pop("ARBOR_PASSWORD", None)
+        captured = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(captured):
+                code = self.probe.main(
+                    ["report", "--email", "nobody@example.invalid",
+                     "--keychain-service", "arbor-probe-absent"]
+                )
+        finally:
+            if previous is not None:
+                os.environ["ARBOR_PASSWORD"] = previous
+        self.assertEqual(code, 2)
+        message = captured.getvalue()
+        self.assertIn("add-generic-password", message)
+        self.assertIn("read -rs ARBOR_PASSWORD", message)
+
     def test_there_is_no_password_argument(self) -> None:
         # A --password flag would be recorded in the user's shell history.
         actions = {

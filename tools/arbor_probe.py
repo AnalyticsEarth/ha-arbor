@@ -9,8 +9,13 @@ nothing to install.
 
 Your password is never taken as an argument (it would land in your shell
 history) and never written anywhere. It is read from the ARBOR_PASSWORD
-environment variable if set, otherwise prompted for without echo. To set it for
-a terminal session without recording it in history:
+environment variable if set, then from the macOS Keychain, and only then
+prompted for. To store it once so no run ever has to ask again:
+
+    security add-generic-password -a you@example.com -s arbor-probe -w
+
+That prompts for the password without echo and keeps it in your Keychain; this
+script only ever reads it. For a single terminal session instead:
 
     read -rs ARBOR_PASSWORD && export ARBOR_PASSWORD
 
@@ -35,6 +40,7 @@ import http.cookiejar
 import json
 import logging
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -344,6 +350,49 @@ class UrllibArborClient:
         if self._base_url is None:
             raise ArborConfigurationError("No Arbor school selected")
         return self._base_url
+
+
+DEFAULT_KEYCHAIN_SERVICE = "arbor-probe"
+
+
+def keychain_password(email: str, service: str) -> str | None:
+    """Read the password from the macOS Keychain, if it is stored there.
+
+    The user puts it there themselves with `security add-generic-password`; this
+    only reads it, never writes it, and never logs it. Any failure -- no
+    Keychain, no entry, access declined -- simply means "not available".
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-a",
+                email,
+                "-s",
+                service,
+                "-w",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    password = result.stdout.rstrip("\n")
+    return password or None
+
+
+def keychain_store_command(email: str, service: str) -> str:
+    """The one-time command that puts the password in the Keychain."""
+    return (
+        f"security add-generic-password -a {email} -s {service} -w"
+    )
 
 
 def _config_path() -> Path:
@@ -847,6 +896,12 @@ def build_parser() -> argparse.ArgumentParser:
         "the output will contain your child's personal data.",
     )
     parser.add_argument(
+        "--keychain-service",
+        default=os.environ.get("ARBOR_KEYCHAIN_SERVICE", DEFAULT_KEYCHAIN_SERVICE),
+        help="macOS Keychain service name to read the password from "
+        f"(default {DEFAULT_KEYCHAIN_SERVICE!r}).",
+    )
+    parser.add_argument(
         "--depth",
         type=int,
         default=DEFAULT_SHAPE_DEPTH,
@@ -883,11 +938,26 @@ def main(argv: list[str] | None = None) -> int:
 
     # Never a command-line argument: it would be recorded in shell history.
     password = os.environ.get("ARBOR_PASSWORD")
+    source = "$ARBOR_PASSWORD"
     if not password:
+        password = keychain_password(args.email, args.keychain_service)
+        source = "the macOS Keychain"
+    if not password and sys.stdin.isatty():
         password = getpass.getpass(f"Arbor password for {args.email}: ")
+        source = "the prompt"
     if not password:
-        print("error: no password given", file=sys.stderr)
+        print(
+            "error: no password available, and there is no terminal to ask on.\n\n"
+            "Store it once in your Keychain (it prompts without echo, and nothing\n"
+            "is written to your shell history):\n"
+            f"    {keychain_store_command(args.email, args.keychain_service)}\n\n"
+            "Or set it for one terminal session:\n"
+            "    read -rs ARBOR_PASSWORD && export ARBOR_PASSWORD",
+            file=sys.stderr,
+        )
         return 2
+    if args.verbose:
+        _LOGGER.debug("Password taken from %s", source)
 
     client = UrllibArborClient(args.email, password, args.school)
     try:

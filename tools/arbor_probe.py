@@ -36,6 +36,7 @@ import argparse
 import asyncio
 import getpass
 import gzip
+import http.client
 import http.cookiejar
 import json
 import logging
@@ -209,6 +210,14 @@ class UrllibArborClient:
             raise ArborConnectionError(f"Cannot reach {url}: {err.reason}") from err
         except TimeoutError as err:
             raise ArborConnectionError(f"Timed out fetching {url}") from err
+        except http.client.HTTPException as err:
+            # RemoteDisconnected and friends are not URLErrors, so they escaped
+            # as a raw traceback instead of a reportable failure.
+            raise ArborConnectionError(
+                f"Connection to {url} failed: {type(err).__name__}: {err}"
+            ) from err
+        except OSError as err:
+            raise ArborConnectionError(f"Network error reaching {url}: {err}") from err
 
     # -- login --------------------------------------------------------------
 

@@ -611,3 +611,47 @@ class TestPasswordIsOnlyNeededForALogin(unittest.TestCase):
         )
         with self.assertRaises(self.probe.ArborConfigurationError):
             _ = client.password
+
+
+class TestNetworkFailuresAreReported(unittest.TestCase):
+    """A dropped connection must be a reportable failure, not a traceback."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.probe = _load_probe()
+
+    def _client_raising(self, error: Exception):
+        probe = self.probe
+
+        class Failing(probe.UrllibArborClient):
+            def __init__(self) -> None:
+                super().__init__(
+                    "a@b.c", "pw", "https://s.uk.arbor.education", reuse_session=False
+                )
+
+                class Opener:
+                    def open(self, request, timeout=None):
+                        raise error
+
+                self._opener = Opener()
+
+        return Failing()
+
+    def test_a_dropped_connection_becomes_a_connection_error(self) -> None:
+        import http.client
+
+        client = self._client_raising(
+            http.client.RemoteDisconnected("Remote end closed connection")
+        )
+        with self.assertRaises(self.probe.ArborConnectionError) as caught:
+            client.request_raw(
+                self.probe.protocol.HttpRequest("GET", "https://s.example/x", None, {})
+            )
+        self.assertIn("RemoteDisconnected", str(caught.exception))
+
+    def test_an_os_error_becomes_a_connection_error(self) -> None:
+        client = self._client_raising(OSError("host unreachable"))
+        with self.assertRaises(self.probe.ArborConnectionError):
+            client.request_raw(
+                self.probe.protocol.HttpRequest("GET", "https://s.example/x", None, {})
+            )

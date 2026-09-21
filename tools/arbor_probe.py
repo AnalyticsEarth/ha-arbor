@@ -47,6 +47,7 @@ import urllib.parse
 import urllib.request
 import zlib
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 # Import the integration's own modules without pulling in Home Assistant.
@@ -131,13 +132,16 @@ class UrllibArborClient:
     def __init__(
         self,
         email: str,
-        password: str,
+        password: str | Callable[[], str],
         school: str | None = None,
         *,
         reuse_session: bool = True,
     ) -> None:
         self._email = email
-        self._password = password
+        # Resolved only if a login is actually needed. With a saved session and a
+        # remembered school, a run needs no credential at all -- which matters
+        # wherever the Keychain cannot be reached, and means fewer logins.
+        self._password_source = password
         # A school may be given as a URL, which needs no lookup, or as a name
         # fragment, which is resolved against the account's schools at login.
         self._base_url: str | None = None
@@ -168,7 +172,11 @@ class UrllibArborClient:
 
     @property
     def password(self) -> str:
-        return self._password
+        """The password, resolved on first use."""
+        if callable(self._password_source):
+            resolved = self._password_source()
+            self._password_source = resolved
+        return self._password_source
 
     def request_raw(self, request: Any) -> tuple[int, str]:
         """Make one protocol request and return its status and body verbatim."""
@@ -205,7 +213,7 @@ class UrllibArborClient:
     # -- login --------------------------------------------------------------
 
     def list_schools(self) -> list[Any]:
-        request = protocol.school_search_request(self._email, self._password)
+        request = protocol.school_search_request(self._email, self.password)
         status, body = self._request(
             request.method, request.url, request.body, request.headers
         )
@@ -270,7 +278,7 @@ class UrllibArborClient:
         if self._base_url is None:
             self._base_url = self._resolve_school()
 
-        request = protocol.login_request(self._base_url, self._email, self._password)
+        request = protocol.login_request(self._base_url, self._email, self.password)
         status, body = self._request(
             request.method, request.url, request.body, request.headers
         )
@@ -1015,31 +1023,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: '{args.command}' needs a path argument", file=sys.stderr)
         return 2
 
-    # Never a command-line argument: it would be recorded in shell history.
-    password = os.environ.get("ARBOR_PASSWORD")
-    source = "$ARBOR_PASSWORD"
-    if not password:
-        password = keychain_password(args.email, args.keychain_service)
-        source = "the macOS Keychain"
-    if not password and sys.stdin.isatty():
-        password = getpass.getpass(f"Arbor password for {args.email}: ")
-        source = "the prompt"
-    if not password:
-        print(
-            "error: no password available, and there is no terminal to ask on.\n\n"
+    def resolve_password() -> str:
+        """Find a password, only once one is actually needed."""
+        # Never a command-line argument: it would be in shell history.
+        if password := os.environ.get("ARBOR_PASSWORD"):
+            _LOGGER.debug("Password taken from $ARBOR_PASSWORD")
+            return password
+        if password := keychain_password(args.email, args.keychain_service):
+            _LOGGER.debug("Password taken from the macOS Keychain")
+            return password
+        if sys.stdin.isatty():
+            return getpass.getpass(f"Arbor password for {args.email}: ")
+        raise ArborConfigurationError(
+            "a login is needed but no password is available, and there is no "
+            "terminal to ask on.\n\n"
             "Store it once in your Keychain (it prompts without echo, and nothing\n"
             "is written to your shell history):\n"
             f"    {keychain_store_command(args.email, args.keychain_service)}\n\n"
             "Or set it for one terminal session:\n"
-            "    read -rs ARBOR_PASSWORD && export ARBOR_PASSWORD",
-            file=sys.stderr,
+            "    read -rs ARBOR_PASSWORD && export ARBOR_PASSWORD"
         )
-        return 2
-    if args.verbose:
-        _LOGGER.debug("Password taken from %s", source)
 
     client = UrllibArborClient(
-        args.email, password, args.school, reuse_session=not args.fresh
+        args.email, resolve_password, args.school, reuse_session=not args.fresh
     )
     try:
         return asyncio.run(COMMANDS[args.command](client, args))

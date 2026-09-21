@@ -570,3 +570,44 @@ class TestProbeToolArgumentChecks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPasswordIsOnlyNeededForALogin(unittest.TestCase):
+    """A saved session should make a run need no credential at all."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.probe = _load_probe()
+
+    def test_the_password_is_not_resolved_unless_asked_for(self) -> None:
+        calls: list[int] = []
+
+        def provider() -> str:
+            calls.append(1)
+            return "pw"
+
+        client = self.probe.UrllibArborClient(
+            "a@b.c", provider, "https://s.uk.arbor.education"
+        )
+        self.assertEqual(calls, [], "constructing a client must not need a password")
+        self.assertEqual(client.password, "pw")
+        self.assertEqual(len(calls), 1)
+        # Resolved once, then cached.
+        self.assertEqual(client.password, "pw")
+        self.assertEqual(len(calls), 1)
+
+    def test_a_plain_string_still_works(self) -> None:
+        client = self.probe.UrllibArborClient(
+            "a@b.c", "pw", "https://s.uk.arbor.education"
+        )
+        self.assertEqual(client.password, "pw")
+
+    def test_a_provider_may_refuse_and_that_reaches_the_caller(self) -> None:
+        def provider() -> str:
+            raise self.probe.ArborConfigurationError("no password available")
+
+        client = self.probe.UrllibArborClient(
+            "a@b.c", provider, "https://s.uk.arbor.education"
+        )
+        with self.assertRaises(self.probe.ArborConfigurationError):
+            _ = client.password

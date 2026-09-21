@@ -150,7 +150,73 @@ def _balance_unit(student: StudentData) -> str:
     return _CURRENCY_SYMBOLS.get(currency, currency)
 
 
+def _summary_attrs(student: StudentData) -> dict[str, Any]:
+    """Everything known about a child, in one place.
+
+    This backs the per-child summary entity, for dashboard cards and templates
+    that want the whole picture without referencing a dozen entity ids. The
+    individual sensors remain the place to get history and numeric triggers.
+    """
+    lesson = student.next_lesson
+    today = date.today()
+    account = student.primary_account
+    return {
+        "student_id": student.student_id,
+        "year_group": student.year_group,
+        "form_group": student.form_group,
+        "attendance_percentage": student.attendance.percentage,
+        "attendance": _attendance_attrs(student),
+        "behaviour_points": student.behaviour_points_net,
+        "positive_points": student.behaviour_points_positive,
+        "negative_points": student.behaviour_points_negative,
+        "behaviour_incidents": _incident_attrs(student.behaviour_incidents),
+        "assignments_total": len(student.assignments),
+        "assignments_outstanding": len(student.outstanding_assignments),
+        "assignments_overdue": len(student.overdue_assignments),
+        "assignments": _assignment_attrs(student.assignments),
+        "next_lesson": lesson.summary if lesson else None,
+        "next_lesson_start": _iso(lesson.start) if lesson else None,
+        "next_lesson_location": lesson.location if lesson else None,
+        "next_lesson_teacher": lesson.teacher if lesson else None,
+        "lessons_today": sum(
+            1
+            for item in student.lessons
+            if (item.start.date() if item.start else item.all_day_on) == today
+        ),
+        "lessons": _lesson_attrs(student.lessons),
+        "meal_balance": account.balance if account else None,
+        "accounts": [
+            {"name": item.name, "balance": item.balance, "currency": item.currency}
+            for item in student.accounts[:MAX_LIST_ATTRIBUTES]
+        ],
+        "grades": [
+            {
+                "subject": item.subject,
+                "grade": item.value,
+                "target": item.target,
+                "assessment": item.assessment,
+            }
+            for item in student.grades[:MAX_LIST_ATTRIBUTES]
+        ],
+        "notices_count": len(student.notices),
+        "notices": [
+            {"title": item.title, "published": _iso(item.published)}
+            for item in student.notices[:MAX_LIST_ATTRIBUTES]
+        ],
+        "missing_data": sorted(student.empty_domains),
+    }
+
+
 SENSORS: tuple[ArborSensorDescription, ...] = (
+    # `name=None` makes this the device's primary entity, so it is called after
+    # the child rather than carrying a suffix: sensor.amelia_example.
+    ArborSensorDescription(
+        key="summary",
+        name=None,
+        icon="mdi:account-school-outline",
+        value_fn=lambda student: student.name,
+        attributes_fn=_summary_attrs,
+    ),
     ArborSensorDescription(
         key="attendance",
         translation_key="attendance",
@@ -277,6 +343,22 @@ class ArborSensor(ArborStudentEntity, SensorEntity):
     """A single reported value about one child."""
 
     entity_description: ArborSensorDescription
+
+    # List-valued attributes change on most refreshes and would bloat the
+    # recorder database without being useful as history.
+    _unrecorded_attributes = frozenset(
+        {
+            "accounts",
+            "assignments",
+            "attendance",
+            "behaviour_incidents",
+            "grades",
+            "lessons",
+            "notices",
+            "recent_incidents",
+            "upcoming",
+        }
+    )
 
     def __init__(
         self,

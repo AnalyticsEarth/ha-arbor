@@ -104,6 +104,8 @@ class ArborBinarySensor(ArborStudentEntity, BinarySensorEntity):
 
     entity_description: ArborBinarySensorDescription
 
+    _unrecorded_attributes = frozenset({"titles"})
+
     def __init__(
         self,
         coordinator: ArborCoordinator,

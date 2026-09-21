@@ -53,6 +53,7 @@ Per child:
 
 | Entity | Type | Notes |
 | --- | --- | --- |
+| *(the child)* | sensor | Named after the child, e.g. `sensor.amelia_example`. State is their name; **every** detail below is on it as an attribute |
 | Attendance | sensor (%) | Attributes: present sessions, authorised/unauthorised absences, lates |
 | Behaviour points | sensor | Net points. Attributes: positive, negative, recent incidents |
 | Positive points / Negative points | sensor | The two sides on their own, for graphing |
@@ -69,6 +70,27 @@ Per child:
 
 Entities whose data your school does not publish stay `unknown` rather than
 disappearing, so an automation referencing them never breaks.
+
+### The summary entity
+
+Each child's device has one entity named after the child itself, carrying the
+whole picture as attributes — attendance, behaviour, assignments, timetable,
+grades, balances and notices. It is there for dashboard cards and templates that
+want everything in one place:
+
+```yaml
+type: markdown
+content: >-
+  {% set c = state_attr('sensor.amelia_example', 'attendance_percentage') %}
+  Attendance {{ c }}% ·
+  {{ state_attr('sensor.amelia_example', 'assignments_outstanding') }} assignments due
+  ({{ state_attr('sensor.amelia_example', 'assignments_overdue') }} overdue) ·
+  next: {{ state_attr('sensor.amelia_example', 'next_lesson') }}
+```
+
+Use the individual sensors for anything you want to **graph or trigger on** —
+attributes are not kept in history, and the list-valued ones are explicitly
+excluded from the recorder so they do not bloat your database.
 
 ### Siblings
 

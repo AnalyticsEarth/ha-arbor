@@ -128,7 +128,14 @@ class UrllibArborClient:
     integration's modules so the two cannot disagree about what Arbor said.
     """
 
-    def __init__(self, email: str, password: str, school: str | None = None) -> None:
+    def __init__(
+        self,
+        email: str,
+        password: str,
+        school: str | None = None,
+        *,
+        reuse_session: bool = True,
+    ) -> None:
         self._email = email
         self._password = password
         # A school may be given as a URL, which needs no lookup, or as a name
@@ -141,7 +148,12 @@ class UrllibArborClient:
             else:
                 self._school_selector = selector
         self._logged_in = False
-        self._jar = http.cookiejar.CookieJar()
+        self._jar = http.cookiejar.LWPCookieJar(str(_cookie_path()))
+        if reuse_session:
+            try:
+                self._jar.load(ignore_discard=True, ignore_expires=True)
+            except (OSError, http.cookiejar.LoadError):
+                pass
         self._opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self._jar)
         )
@@ -273,6 +285,17 @@ class UrllibArborClient:
             raise ArborConnectionError("Arbor did not issue a session cookie")
         self._logged_in = True
         remember_school(self._email, self._base_url)
+        self._save_session()
+
+    def _save_session(self) -> None:
+        """Persist the session cookie so the next run need not log in again."""
+        path = _cookie_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._jar.save(ignore_discard=True, ignore_expires=True)
+            path.chmod(0o600)
+        except OSError as err:
+            _LOGGER.debug("Could not save the session: %s", err)
 
     def _has_session_cookie(self) -> bool:
         """Whether the jar holds a session cookie for *this tenant*.
@@ -304,6 +327,7 @@ class UrllibArborClient:
         if verdict == RESPONSE_SESSION_STALE:
             if retried:
                 raise ArborNotAvailableError(f"{description}: session refused")
+            # The saved session may simply have expired; log in once and retry.
             self._logged_in = False
             self.login()
             return self._fetch(url, description, retried=True)
@@ -344,9 +368,18 @@ class UrllibArborClient:
         return self._fetch(f"{base}{path}", f"endpoint {path}")
 
     def _ensure_logged_in(self) -> str:
-        """Log in if needed and return the tenant base URL."""
+        """Reuse a saved session if there is one, otherwise log in."""
         if not self._logged_in:
-            self.login()
+            if self._base_url is None and self._school_selector is None:
+                # A remembered school avoids the lookup request as well.
+                remembered = remembered_school(self._email)
+                if remembered is not None:
+                    self._base_url = remembered
+            if self._base_url is not None and self._has_session_cookie():
+                _LOGGER.debug("Reusing the saved Arbor session")
+                self._logged_in = True
+            else:
+                self.login()
         if self._base_url is None:
             raise ArborConfigurationError("No Arbor school selected")
         return self._base_url
@@ -393,6 +426,17 @@ def keychain_store_command(email: str, service: str) -> str:
     return (
         f"security add-generic-password -a {email} -s {service} -w"
     )
+
+
+def _cookie_path() -> Path:
+    """Where the portal session is kept between runs.
+
+    A session cookie is a bearer credential, so the file is created 0600. It is
+    the same kind of thing a browser's cookie jar holds, and keeping it is what
+    stops every invocation logging in again -- which is what trips Arbor's limit
+    on logins.
+    """
+    return _config_path().with_name("cookies.txt")
 
 
 def _config_path() -> Path:
@@ -896,6 +940,12 @@ def build_parser() -> argparse.ArgumentParser:
         "the output will contain your child's personal data.",
     )
     parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="ignore the saved session and log in again. Arbor limits logins, so "
+        "prefer reusing the session unless you are testing the login itself.",
+    )
+    parser.add_argument(
         "--keychain-service",
         default=os.environ.get("ARBOR_KEYCHAIN_SERVICE", DEFAULT_KEYCHAIN_SERVICE),
         help="macOS Keychain service name to read the password from "
@@ -959,7 +1009,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.verbose:
         _LOGGER.debug("Password taken from %s", source)
 
-    client = UrllibArborClient(args.email, password, args.school)
+    client = UrllibArborClient(
+        args.email, password, args.school, reuse_session=not args.fresh
+    )
     try:
         return asyncio.run(COMMANDS[args.command](client, args))
     except ArborConfigurationError as err:

@@ -253,6 +253,12 @@ session instead:
 read -rs ARBOR_PASSWORD && export ARBOR_PASSWORD
 ```
 
+The portal session is kept in `~/.config/arbor-probe/cookies.txt` (mode 0600), so
+running several commands in a row logs in **once**, not once each. Arbor limits
+unsuccessful logins and answers a throttled login much like a wrong password, so
+this matters. `--fresh` ignores the saved session when you are testing login
+itself.
+
 If your account covers children at more than one school it asks which one, once,
 and remembers your answer for next time:
 

@@ -228,6 +228,93 @@ class TestProbeToolSessionChecks(unittest.TestCase):
         self.assertIn("studentName", summary)
 
 
+class TestSessionReuse(unittest.TestCase):
+    """Logging in on every invocation is what trips Arbor's login limit."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.probe = _load_probe()
+
+    def setUp(self) -> None:
+        import os
+        import tempfile
+
+        self._dir = tempfile.TemporaryDirectory()
+        self._previous = os.environ.get("ARBOR_PROBE_CONFIG")
+        os.environ["ARBOR_PROBE_CONFIG"] = str(Path(self._dir.name) / "schools.json")
+        self.probe.remember_school("a@b.c", "https://s.uk.arbor.education")
+
+    def tearDown(self) -> None:
+        import os
+
+        if self._previous is None:
+            os.environ.pop("ARBOR_PROBE_CONFIG", None)
+        else:
+            os.environ["ARBOR_PROBE_CONFIG"] = self._previous
+        self._dir.cleanup()
+
+    def _client(self, logins: list[str], *, reuse: bool = True):
+        import http.cookiejar
+        import json
+
+        probe = self.probe
+
+        class Stub(probe.UrllibArborClient):
+            def _request(self, method, url, body, headers):
+                if "/auth/login" in url:
+                    logins.append(url)
+                    return 200, json.dumps(
+                        {
+                            "success": True,
+                            "items": [{"logged_in": True, "session_id": "s"}],
+                        }
+                    )
+                if "?session=" in url:
+                    self._jar.set_cookie(
+                        http.cookiejar.Cookie(
+                            0, "mis", "tok", None, False, "s.uk.arbor.education",
+                            True, False, "/", True, True, None, True, None, None, {},
+                        )
+                    )
+                    return 200, ""
+                return 200, json.dumps({"ok": True})
+
+        return Stub("a@b.c", "pw", reuse_session=reuse)
+
+    def test_a_second_run_reuses_the_session(self) -> None:
+        import asyncio
+
+        logins: list[str] = []
+        asyncio.run(self._client(logins).fetch_json("/x"))
+        self.assertEqual(len(logins), 1)
+        # A separate client, as a separate invocation would be.
+        asyncio.run(self._client(logins).fetch_json("/x"))
+        self.assertEqual(len(logins), 1, "the saved session should have been reused")
+
+    def test_fresh_forces_a_login(self) -> None:
+        import asyncio
+
+        logins: list[str] = []
+        asyncio.run(self._client(logins).fetch_json("/x"))
+        asyncio.run(self._client(logins, reuse=False).fetch_json("/x"))
+        self.assertEqual(len(logins), 2)
+
+    def test_the_session_file_is_not_world_readable(self) -> None:
+        import asyncio
+
+        asyncio.run(self._client([]).fetch_json("/x"))
+        path = Path(self.probe._cookie_path())
+        self.assertTrue(path.exists())
+        self.assertEqual(path.stat().st_mode & 0o077, 0)
+
+    def test_a_corrupt_session_file_is_ignored(self) -> None:
+        path = Path(self.probe._cookie_path())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("not a cookie jar")
+        # Constructing the client must not raise.
+        self.probe.UrllibArborClient("a@b.c", "pw", "https://s.uk.arbor.education")
+
+
 class TestSchoolSelection(unittest.TestCase):
     """An account can cover several Arbor tenants; picking one must be easy."""
 

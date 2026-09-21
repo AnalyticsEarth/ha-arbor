@@ -169,9 +169,15 @@ class UrllibArborClient:
         if self._base_url is None:
             schools = self.list_schools()
             if len(schools) > 1:
-                names = ", ".join(school.label for school in schools)
+                listing = "\n".join(
+                    f"  --school-url {school.base_url}    # {school.label}"
+                    for school in schools
+                )
                 raise ArborError(
-                    f"This account covers several schools; pass --school-url. Found: {names}"
+                    f"This account covers {len(schools)} schools, so pick one:\n\n"
+                    f"{listing}\n\n"
+                    "Each school is a separate Arbor tenant with its own children, "
+                    "and in Home Assistant a separate config entry."
                 )
             self._base_url = schools[0].base_url
             print(f"school:   {schools[0].label} -> {self._base_url}", file=sys.stderr)

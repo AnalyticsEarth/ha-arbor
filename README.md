@@ -238,6 +238,10 @@ It prompts for your password without echoing it. Set `ARBOR_PASSWORD` instead if
 you prefer. There is deliberately **no `--password` flag**: it would be recorded
 in your shell history.
 
+If your account covers children at more than one school, it will not guess — it
+lists the schools with a ready-made `--school-url` for each. Each school is a
+separate Arbor tenant, and a separate config entry in Home Assistant.
+
 ```
 ── A… E…  (id 40219)
    attendance        96.4%

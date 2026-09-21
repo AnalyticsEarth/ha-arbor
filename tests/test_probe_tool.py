@@ -86,6 +86,54 @@ class TestProbeToolIsPrivateByDefault(unittest.TestCase):
         self.assertNotIn("-p", actions)
 
 
+class TestProbeToolSessionChecks(unittest.TestCase):
+    """The session cookie must belong to the school, not the login service."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.probe = _load_probe()
+
+    def _client(self, cookie_domain: str | None):
+        import http.cookiejar
+
+        client = self.probe.UrllibArborClient(
+            "a@b.c", "pw", "https://school.uk.arbor.education"
+        )
+        if cookie_domain is not None:
+            client._jar.set_cookie(
+                http.cookiejar.Cookie(
+                    0, "mis", "x", None, False, cookie_domain, True, False,
+                    "/", True, True, None, False, None, None, {},
+                )
+            )
+        return client
+
+    def test_a_tenant_cookie_counts(self) -> None:
+        self.assertTrue(self._client("school.uk.arbor.education")._has_session_cookie())
+
+    def test_a_login_service_cookie_does_not(self) -> None:
+        # Would otherwise report a good session the school never granted.
+        self.assertFalse(self._client("login.arbor.sc")._has_session_cookie())
+
+    def test_no_cookie_at_all_does_not(self) -> None:
+        self.assertFalse(self._client(None)._has_session_cookie())
+
+    def test_reads_the_logged_in_flag(self) -> None:
+        self.assertIs(
+            self.probe._logged_in_flag({"items": [{"logged_in": True}]}), True
+        )
+        self.assertIs(
+            self.probe._logged_in_flag({"items": [{"logged_in": False}]}), False
+        )
+        self.assertIsNone(self.probe._logged_in_flag({"items": [{}]}))
+        self.assertIsNone(self.probe._logged_in_flag("nonsense"))
+
+    def test_summaries_carry_no_content(self) -> None:
+        summary = self.probe._summarise({"studentName": "Amelia Example", "x": 1})
+        self.assertNotIn("Amelia", summary)
+        self.assertIn("studentName", summary)
+
+
 class TestProbeToolArgumentChecks(unittest.TestCase):
     """Commands that need a path must say so rather than failing later."""
 

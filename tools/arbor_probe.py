@@ -33,6 +33,7 @@ import logging
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 from pathlib import Path
@@ -125,6 +126,11 @@ class UrllibArborClient:
     def base_url(self) -> str | None:
         return self._base_url
 
+    @property
+    def cookies(self) -> list[Any]:
+        """Cookies held, for diagnosis. Names and domains only are ever shown."""
+        return list(self._jar)
+
     # -- transport ----------------------------------------------------------
 
     def _request(
@@ -181,11 +187,28 @@ class UrllibArborClient:
             None,
             {"User-Agent": protocol.USER_AGENT},
         )
-        if not any(
-            cookie.name in protocol.SESSION_COOKIE_NAMES for cookie in self._jar
-        ):
+        if not self._has_session_cookie():
             raise ArborConnectionError("Arbor did not issue a session cookie")
         self._logged_in = True
+
+    def _has_session_cookie(self) -> bool:
+        """Whether the jar holds a session cookie for *this tenant*.
+
+        The jar also holds cookies from login.arbor.sc, set while looking the
+        school up. Accepting one of those would report a good session when the
+        school itself never issued one -- which is precisely the failure this
+        check exists to catch.
+        """
+        if self._base_url is None:
+            return False
+        host = urllib.parse.urlsplit(self._base_url).hostname or ""
+        for cookie in self._jar:
+            if cookie.name not in protocol.SESSION_COOKIE_NAMES:
+                continue
+            domain = (cookie.domain or "").lstrip(".")
+            if domain and (host == domain or host.endswith(f".{domain}")):
+                return True
+        return False
 
     # -- fetching -----------------------------------------------------------
 
@@ -402,20 +425,84 @@ async def cmd_json(client: UrllibArborClient, args: argparse.Namespace) -> int:
 
 
 async def cmd_whoami(client: UrllibArborClient, args: argparse.Namespace) -> int:
+    """Establish a session and prove whether Arbor considers it logged in.
+
+    Every portal route answers an unauthenticated request with the same 401 a
+    forbidden one gives, so "the dashboard 401'd" does not say whether the
+    session failed or the route is simply not on offer. ``logged_in`` from
+    current-user-settings is what separates the two.
+    """
     client.login()
-    print(f"base_url: {client.base_url}")
-    for path in (CURRENT_USER_SETTINGS_PATH,):
-        try:
-            print(f"\n{path}:")
-            print(_fmt(redact(await client.fetch_json(path), args.show_values)))
-        except ArborError as err:
-            print(f"  ! {err}")
+    print(f"base_url:  {client.base_url}")
+    print("cookies:   " + (
+        ", ".join(f"{c.name}@{c.domain}" for c in client.cookies) or "(none)"
+    ))
+
+    session_ok: bool | None = None
     try:
-        print(f"\n{GUARDIAN_DASHBOARD_PAGE}:")
-        print(_fmt(redact(await client.fetch_page(GUARDIAN_DASHBOARD_PAGE), args.show_values)))
+        settings = await client.fetch_json(CURRENT_USER_SETTINGS_PATH)
+        session_ok = _logged_in_flag(settings)
+        print(f"logged_in: {session_ok}")
+        if args.show_values:
+            print(_fmt(settings))
+        else:
+            print(_fmt(redact(settings, False)))
     except ArborError as err:
-        print(f"  ! {err}")
+        print(f"logged_in: could not tell ({err})")
+
+    print("\nhomepages:")
+    reachable = 0
+    for path in scraper.HOMEPAGE_CANDIDATES:
+        try:
+            tree = await client.fetch_page(path)
+        except ArborError as err:
+            print(f"  ✗ {path}\n      {err}")
+            continue
+        reachable += 1
+        print(f"  ✓ {path}  ({_summarise(tree)})")
+
+    print("\nendpoints:")
+    for path in ("/navigation/main-menu/format/json", "/widget-data/get-notices/format/json"):
+        try:
+            tree = await client.fetch_json(path)
+            print(f"  ✓ {path}  ({_summarise(tree)})")
+        except ArborError as err:
+            print(f"  ✗ {path}\n      {err}")
+
+    if session_ok is False:
+        print(
+            "\nArbor does not consider this session logged in, so every 401 above is "
+            "a session problem rather than a permissions one.",
+            file=sys.stderr,
+        )
+        return 3
+    if not reachable:
+        print(
+            "\nThe session is valid but no homepage is available to this account. "
+            "Please send the output above; the route list is what is needed next.",
+            file=sys.stderr,
+        )
+        return 4
     return 0
+
+
+def _logged_in_flag(settings: Any) -> bool | None:
+    """Read `logged_in` out of a current-user-settings payload."""
+    items = settings.get("items") if isinstance(settings, dict) else None
+    if isinstance(items, list) and items and isinstance(items[0], dict):
+        value = items[0].get("logged_in")
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _summarise(tree: Any) -> str:
+    """One-line description of a payload, with no content in it."""
+    if isinstance(tree, dict):
+        return f"dict, {len(tree)} keys: {', '.join(list(tree)[:6])}"
+    if isinstance(tree, list):
+        return f"list of {len(tree)}"
+    return type(tree).__name__
 
 
 COMMANDS = {

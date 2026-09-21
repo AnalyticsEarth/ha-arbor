@@ -256,7 +256,12 @@ in your shell history.
 | `pages` | The portal pages discovered for your account |
 | `shape <path>` | One page's structure |
 | `json <path>` | One `/format/json` endpoint |
-| `whoami` | Log in and dump the dashboard |
+| `whoami` | **Start here when nothing works.** Proves whether Arbor considers the session logged in, then tries each homepage and endpoint |
+
+`whoami` exists because every portal route answers an unauthenticated request
+with the same `401` a forbidden one gives, so "the dashboard returned 401" does
+not say which happened. It reports `logged_in` from Arbor itself and exits `3`
+for a session problem, `4` when the session is fine but no homepage is on offer.
 
 Output is **redacted by default**: names are masked and free text is replaced
 with a type-and-length placeholder such as `str[14]`, so a result can be pasted

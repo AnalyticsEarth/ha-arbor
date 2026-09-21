@@ -61,6 +61,13 @@ type PageFetcher = Callable[[str], Awaitable[Any]]
 #: Fetches a direct `/format/json` endpoint.
 type JsonFetcher = Callable[[str], Awaitable[Any]]
 
+# Portal homepages, in the order they are worth trying for a guardian.
+HOMEPAGE_CANDIDATES = (
+    GUARDIAN_DASHBOARD_PAGE,
+    STUDENT_DASHBOARD_PAGE,
+    STAFF_HOME_PAGE,
+)
+
 # Upper bound on pages fetched per child per refresh, so an unusual portal
 # layout cannot turn one update into hundreds of requests.
 MAX_PAGES_PER_STUDENT = 12
@@ -124,15 +131,17 @@ class ArborScraper:
                 settings, ("schoolName", "school_name", "institutionName", "applicationName")
             )
 
-        dashboard = await self._dashboard()
+        dashboard, homepage_reasons = await self._dashboard()
         menu = await self._try_json(MAIN_MENU_PATH)
         roots = [tree for tree in (dashboard, menu) if tree is not None]
         if not roots:
+            detail = "; ".join(homepage_reasons) or "no reason reported"
             raise ArborError(
-                "Could not read the Arbor dashboard. Signing in worked, so this is a "
-                "page-level problem: run the arbor.dump_page service against "
-                f"{GUARDIAN_DASHBOARD_PAGE} to see what your school returns"
+                "Could not read any Arbor homepage, so there is nothing to discover "
+                f"children from. Signing in succeeded, so this is page-level. Tried: "
+                f"{detail}"
             )
+        data.warnings.extend(homepage_reasons)
 
         data.discovered_pages = classify_pages(roots, DOMAIN_KEYWORDS)
 
@@ -185,14 +194,37 @@ class ArborScraper:
 
         return data
 
-    async def _dashboard(self) -> Any | None:
-        """The guardian dashboard, falling back to the other portal homepages."""
-        for path in (GUARDIAN_DASHBOARD_PAGE, STUDENT_DASHBOARD_PAGE, STAFF_HOME_PAGE):
-            tree = await self._try_page(path)
-            if tree is not None:
-                self._log.debug("Using %s as the Arbor homepage", path)
-                return tree
-        return None
+    async def _dashboard(self) -> tuple[Any | None, list[str]]:
+        """The guardian dashboard, falling back to the other portal homepages.
+
+        Returns the tree and, whether or not one was found, why each candidate
+        was rejected. Throwing those reasons away made a failure here impossible
+        to diagnose: every homepage answers an unauthenticated request with the
+        same 401 a forbidden one does.
+        """
+        reasons: list[str] = []
+        for path in HOMEPAGE_CANDIDATES:
+            key = _endpoint_key(path)
+            if key in self._unavailable:
+                reasons.append(f"{path}: refused earlier in this session")
+                continue
+            try:
+                tree = await self._fetch_page(path)
+            except ArborAuthError:
+                raise
+            except ArborNotAvailableError as err:
+                self._unavailable.add(key)
+                reasons.append(f"{path}: {err}")
+                continue
+            except ArborError as err:
+                reasons.append(f"{path}: {err}")
+                continue
+            if tree is None:
+                reasons.append(f"{path}: empty response")
+                continue
+            self._log.debug("Using %s as the Arbor homepage", path)
+            return tree, reasons
+        return None, reasons
 
     async def _fill_student(
         self,

@@ -265,8 +265,41 @@ def _iter_row_sources(node: dict[str, Any]) -> Iterator[Any]:
                 yield value
 
 
-def find_tables(tree: Any) -> list[Table]:
-    """Every tabular component in a page tree."""
+# A page with more tabular candidates than this is not a page we understand;
+# stop rather than walking a pathological tree.
+_MAX_TABLES = 200
+
+# Keys whose lists describe the interface rather than hold records.
+_NOT_RECORD_KEYS = frozenset(
+    {
+        "columns",
+        "fields",
+        "buttons",
+        "actions",
+        "tabs",
+        "panels",
+        "menu",
+        "widgets",
+        "tiles",
+        "cards",
+        "sections",
+    }
+)
+
+# Keys a declared table reads its rows from.
+_ROW_SOURCE_KEYS = frozenset({"rows", "data", "records", "items", "entries"})
+
+# Fields that mark a dictionary as a rendered component rather than a record.
+_UI_MARKERS = ("xtype", "componentType", "xclass")
+
+
+def _find_declared_tables(tree: Any, consumed: set[int]) -> list[Table]:
+    """Tables that declare their own columns, ExtJS grid style.
+
+    Records the identity of each row list it uses in ``consumed``, so the
+    record-list pass does not report the same rows again under a nested key such
+    as ``store.data``.
+    """
     tables: list[Table] = []
     for node in walk(tree):
         raw_columns = node.get("columns")
@@ -277,8 +310,75 @@ def find_tables(tree: Any) -> list[Table]:
         for rows in _iter_row_sources(node):
             parsed = [values for row in rows if (values := _row_values(row, captions, keys))]
             if parsed:
+                consumed.add(id(rows))
                 tables.append(Table(columns=captions, rows=parsed, title=node_label(node)))
                 break
+        if len(tables) >= _MAX_TABLES:
+            break
+    return tables
+
+
+def _find_record_lists(tree: Any, consumed: set[int]) -> list[Table]:
+    """Tables implied by a list of similar objects.
+
+    Not every Arbor page declares ``columns``; plenty just return a list of
+    records and let the front end decide how to draw them. Those are recognised
+    by shape -- a list of dictionaries that share keys and carry at least two
+    scalar fields each -- with the JSON keys standing in for column captions, so
+    the same keyword matching works on both dialects.
+    """
+    tables: list[Table] = []
+    for node in walk(tree):
+        # Anything this node declares columns for is the other pass's job.
+        declares_columns = isinstance(node.get("columns"), list) and bool(node["columns"])
+        for key, value in node.items():
+            if key in _NOT_RECORD_KEYS:
+                continue
+            if declares_columns and key in _ROW_SOURCE_KEYS:
+                continue
+            if id(value) in consumed:
+                continue
+            if not isinstance(value, list) or len(value) < 1:
+                continue
+            records = [item for item in value if isinstance(item, dict)]
+            if len(records) != len(value):
+                continue
+            # A list of UI components is layout, not data.
+            if any(marker in record for record in records for marker in _UI_MARKERS):
+                continue
+
+            rows: list[dict[str, str]] = []
+            for record in records:
+                flat = {
+                    str(field): rendered
+                    for field, raw in record.items()
+                    if not isinstance(raw, (list, dict))
+                    and (rendered := text_of(raw)) is not None
+                }
+                if len(flat) >= 2:
+                    rows.append(flat)
+
+            # Require the records to actually look like each other.
+            if len(rows) != len(records):
+                continue
+            shared = set(rows[0])
+            if not all(set(row) & shared for row in rows[1:]):
+                continue
+
+            columns = sorted({field for row in rows for field in row})
+            tables.append(
+                Table(columns=columns, rows=rows, title=node_label(node) or str(key))
+            )
+            if len(tables) >= _MAX_TABLES:
+                return tables
+    return tables
+
+
+def find_tables(tree: Any) -> list[Table]:
+    """Every tabular component in a page tree, in either dialect."""
+    consumed: set[int] = set()
+    tables = _find_declared_tables(tree, consumed)
+    tables.extend(_find_record_lists(tree, consumed))
     return tables
 
 
@@ -685,6 +785,10 @@ def extract_behaviour(trees: list[Any]) -> tuple[float | None, float | None, lis
                 kind = _pick(row, table, "type", "behaviour", "incident", "reason", "category")
                 occurred_raw = _pick(row, table, "date", "when", "time", "recorded")
                 comment = _pick(row, table, "comment", "note", "detail", "description")
+                if not any((kind, occurred_raw, comment)):
+                    # A row with nothing identifying it is a summary tile that
+                    # happens to sit in a list, not a logged event.
+                    continue
                 key = (kind, occurred_raw, comment)
                 if key in seen:
                     continue
@@ -1114,6 +1218,119 @@ def caption_mentions(caption: str, keyword: str) -> bool:
     return _keyword_pattern(keyword).search(caption) is not None
 
 
+# Keys that hold a person's full name, most specific first.
+_FULL_NAME_KEYS = (
+    "studentName",
+    "student_name",
+    "preferredName",
+    "preferred_name",
+    "displayName",
+    "fullName",
+    "full_name",
+    "legalName",
+    "name",
+)
+
+# Paired first/last name keys.
+_FIRST_NAME_KEYS = ("firstName", "first_name", "forename", "legalFirstName", "givenName")
+_LAST_NAME_KEYS = ("lastName", "last_name", "surname", "legalLastName", "familyName")
+
+# `...Name` keys that name something other than the child.
+_NOT_STUDENT_NAME_KEYS = frozenset(
+    {
+        "schoolname",
+        "institutionname",
+        "applicationname",
+        "username",
+        "filename",
+        "classname",
+        "groupname",
+        "staffname",
+        "teachername",
+        "roomname",
+        "subjectname",
+        "coursename",
+        "yeargroupname",
+        "registrationgroupname",
+        "formgroupname",
+        "housename",
+        "guardianname",
+        "parentname",
+        "eventname",
+        "assignmentname",
+        "behaviourname",
+        "accountname",
+        "reportname",
+        "templatename",
+        "pagename",
+        "companyname",
+    }
+)
+
+
+def extract_student_name(trees: list[Any]) -> str | None:
+    """Find a child's name in a page tree.
+
+    Arbor does not always put the name in a link caption, so the id can be
+    discovered without ever learning who it belongs to. This looks for the name
+    as data instead: an explicit full-name field, then a first/last pair, then
+    any ``...Name`` field that is not naming something else.
+    """
+    for tree in trees:
+        for node in walk(tree):
+            for key in _FULL_NAME_KEYS:
+                if key not in node:
+                    continue
+                candidate = text_of(node[key])
+                if candidate and _looks_like_name(candidate):
+                    return candidate
+
+    for tree in trees:
+        for node in walk(tree):
+            first = next(
+                (text_of(node[key]) for key in _FIRST_NAME_KEYS if key in node), None
+            )
+            last = next(
+                (text_of(node[key]) for key in _LAST_NAME_KEYS if key in node), None
+            )
+            if first and last:
+                combined = f"{first} {last}".strip()
+                if _looks_like_name(combined):
+                    return combined
+            if first and _looks_like_name(first):
+                return first
+
+    for tree in trees:
+        for node in walk(tree):
+            for key, raw in node.items():
+                if not isinstance(key, str) or not key.casefold().endswith("name"):
+                    continue
+                if key.casefold() in _NOT_STUDENT_NAME_KEYS:
+                    continue
+                candidate = text_of(raw)
+                if candidate and _looks_like_name(candidate):
+                    return candidate
+    return None
+
+
+# Captions that introduce an action rather than a page of data. Matched as a
+# prefix, so "Report cards" is unaffected by "report ".
+_ACTION_CAPTION_PREFIXES = (
+    "log ",
+    "add ",
+    "new ",
+    "book ",
+    "pay ",
+    "top up",
+    "make ",
+    "request ",
+    "apply ",
+    "submit ",
+    "create ",
+    "edit ",
+)
+
+
 def classify_pages(
     trees: list[Any], keywords: dict[str, tuple[str, ...]]
 ) -> dict[str, dict[str, str]]:
@@ -1131,6 +1348,9 @@ def classify_pages(
                 continue
             # A person's name is never a data page, whatever words it contains.
             if _looks_like_name(caption):
+                continue
+            # Nor is a form for doing something.
+            if caption.casefold().startswith(_ACTION_CAPTION_PREFIXES):
                 continue
             for domain, domain_keywords in keywords.items():
                 if any(caption_mentions(caption, keyword) for keyword in domain_keywords):
@@ -1160,6 +1380,105 @@ def filter_pages_for_student(
                 continue
             filtered.setdefault(domain, {})[caption] = url
     return filtered
+
+
+# Keys whose values describe the interface, not the child, so they are safe to
+# report verbatim in a shape dump.
+_STRUCTURAL_VALUE_KEYS = frozenset(
+    {
+        "xtype",
+        "type",
+        "componentType",
+        "xclass",
+        "dataIndex",
+        "field",
+        "format",
+        "success",
+        "role",
+    }
+)
+
+
+def _scalar_shape(value: Any) -> str:
+    """Describe a scalar by type and format, never by content."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return type(value).__name__
+    text = str(value)
+    if not text.strip():
+        return "str(empty)"
+    hints: list[str] = []
+    moment = parse_datetime(text)
+    if moment is not None:
+        hints.append("date" if moment.time() == time.min else "datetime")
+    elif parse_clock(text) is not None:
+        hints.append("time")
+    if parse_time_range(text):
+        hints.append("time-range")
+    if _PERCENT_RE.search(text):
+        hints.append("percent")
+    if _CURRENCY_RE.search(text) or _SIGNED_CURRENCY_RE.search(text):
+        hints.append("currency")
+    if "<" in text and ">" in text:
+        hints.append("html")
+    suffix = f"({','.join(hints)})" if hints else ""
+    return f"str[{len(text)}]{suffix}"
+
+
+def describe_shape(
+    value: Any, *, max_depth: int = 10, max_keys: int = 80, _depth: int = 0
+) -> Any:
+    """A payload's structure with its content removed.
+
+    Reports keys, nesting, list lengths and each scalar's type and format --
+    ``str[10](date)``, ``float(percent)`` -- but never a value, except for a
+    short allowlist of keys that describe the interface rather than the child.
+
+    This is what makes it safe to share a page from a real account: the keys and
+    formats are exactly what a parser needs, and the child's name, teachers'
+    names and comment text never leave Home Assistant.
+    """
+    if _depth >= max_depth:
+        return "<max depth>"
+
+    if isinstance(value, dict):
+        described: dict[str, Any] = {}
+        for index, (key, raw) in enumerate(value.items()):
+            if index >= max_keys:
+                described["<truncated>"] = len(value) - max_keys
+                break
+            name = str(key)
+            if name in _STRUCTURAL_VALUE_KEYS and not isinstance(raw, (dict, list)):
+                described[name] = raw
+            else:
+                described[name] = describe_shape(
+                    raw, max_depth=max_depth, max_keys=max_keys, _depth=_depth + 1
+                )
+        return described
+
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return {"<list>": 0}
+        # Merge a few entries so optional fields are not missed.
+        merged: dict[str, Any] = {}
+        scalars: set[str] = set()
+        for item in list(value)[:3]:
+            described = describe_shape(
+                item, max_depth=max_depth, max_keys=max_keys, _depth=_depth + 1
+            )
+            if isinstance(described, dict):
+                merged.update(described)
+            else:
+                scalars.add(str(described))
+        return {
+            "<list>": len(value),
+            "<of>": merged or (", ".join(sorted(scalars)) or "unknown"),
+        }
+
+    return _scalar_shape(value)
 
 
 def extract_profile_fields(trees: list[Any]) -> dict[str, str]:

@@ -179,6 +179,49 @@ class TestAssignments(unittest.TestCase):
         self.assertEqual(len(parser.extract_assignments([doubled])), 3)
 
 
+class TestRecordListDialect(unittest.TestCase):
+    """Pages that return records without declaring columns.
+
+    Regression: only the declared-column dialect was understood, so a school
+    whose pages return plain record lists produced entities with no data at all
+    even though every page fetched successfully.
+    """
+
+    def test_assignments_from_a_record_list(self) -> None:
+        items = parser.extract_assignments([pages.ASSIGNMENTS_RECORD_LIST])
+        self.assertEqual(len(items), 2)
+        essay = next(item for item in items if "Macbeth" in item.title)
+        self.assertEqual(essay.subject, "English")
+        self.assertEqual(essay.due, datetime(2026, 9, 18, 15, 30))
+        self.assertEqual(essay.grade, "B+")
+        self.assertEqual(essay.teacher, "Mr T Hale")
+        self.assertTrue(essay.is_submitted)
+        worksheet = next(item for item in items if "Photosynthesis" in item.title)
+        self.assertFalse(worksheet.is_submitted)
+
+    def test_behaviour_from_a_record_list(self) -> None:
+        positive, negative, incidents = parser.extract_behaviour(
+            [pages.BEHAVIOUR_RECORD_LIST]
+        )
+        self.assertEqual(len(incidents), 2)
+        self.assertEqual(incidents[0].occurred, datetime(2026, 9, 21))
+        self.assertEqual(incidents[0].subject, "Biology")
+        self.assertTrue(incidents[0].is_positive)
+        self.assertFalse(incidents[1].is_positive)
+        self.assertEqual(positive, 2.0)
+        self.assertEqual(negative, 1.0)
+
+    def test_layout_lists_are_not_read_as_records(self) -> None:
+        # Column definitions and component lists must not become tables.
+        titles = [table.title for table in parser.find_tables(pages.ASSIGNMENTS_PAGE)]
+        self.assertEqual(titles, ["Assignments"])
+
+    def test_rows_are_not_reported_twice(self) -> None:
+        # `store.data` is reachable both as a declared row source and as a bare
+        # record list; it must be counted once.
+        self.assertEqual(len(parser.extract_assignments([pages.ASSIGNMENTS_PAGE])), 3)
+
+
 class TestBehaviour(unittest.TestCase):
     """Behaviour points and incidents."""
 

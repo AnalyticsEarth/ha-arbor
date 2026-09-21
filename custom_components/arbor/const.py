@@ -95,5 +95,6 @@ SERVICE_DUMP_PAGE = "dump_page"
 
 ATTR_STUDENT = "student"
 ATTR_PATH = "path"
+ATTR_INCLUDE_VALUES = "include_values"
 
 MANUFACTURER = "Arbor Education"

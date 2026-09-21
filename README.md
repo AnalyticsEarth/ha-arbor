@@ -148,25 +148,50 @@ automation:
 | `arbor.refresh` | Fetch everything again now, for every configured account |
 | `arbor.dump_page` | Return the raw JSON a portal page serves (response-only) |
 
-`arbor.dump_page` is the tool for diagnosing an empty sensor:
+`arbor.dump_page` is the tool for diagnosing an empty sensor. By default it
+returns only the *structure* of what the page serves, which is safe to paste into
+an issue:
 
 ```yaml
 action: arbor.dump_page
 data:
   config_entry_id: <from the integration's ⋮ menu → "Copy entry id">
-  path: /guardians/home-ui/dashboard
+  path: /guardians/student-ui/assignments/student-id/12345
 ```
+
+```yaml
+shape:
+  success: true
+  assignments:
+    "<list>": 2
+    "<of>":
+      assignmentName: str[19]
+      subjectName: str[7]
+      dueDate: str[19](datetime)
+      submissionStatus: str[9]
+      grade: str[2]
+```
+
+Keys, nesting, list lengths and each value's type and format — and no values, so
+your child's name, their teachers' names and any comments stay in Home Assistant.
+That is everything needed to fix a parser.
+
+Add `include_values: true` to get the payload itself. **That contains your
+child's personal data; do not share it.**
 
 ## When a sensor is empty
 
 Arbor's authenticated page structure varies by school and by Arbor release, and
-the parser recognises tables and tiles by their wording. If a value is missing:
+the parser recognises data by shape and wording rather than by fixed key paths.
+Two dialects are handled: pages that declare their own columns, and pages that
+just return a list of records. If a value is still missing:
 
 1. Check the integration's **Download diagnostics** — it lists which pages were
-   scraped and which domains came back empty, without including personal data.
-2. Run `arbor.dump_page` for the page that should hold the value.
-3. Open an issue with the (redacted) output. Names, ids and comments are personal
-   data — please remove them; the column captions and structure are the useful part.
+   scraped, which domains came back empty, and the shape of each discovered URL,
+   with no personal data.
+2. Run `arbor.dump_page` for the page that should hold the value, leaving
+   `include_values` off.
+3. Open an issue with both. Neither contains your child's data.
 
 ## When will it ask for my password again?
 

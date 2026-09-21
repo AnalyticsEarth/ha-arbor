@@ -47,26 +47,54 @@
   },
   "entity": {
     "sensor": {
-      "attendance": { "name": "Attendance" },
-      "behaviour_points": { "name": "Behaviour points" },
-      "positive_points": { "name": "Positive points" },
-      "negative_points": { "name": "Negative points" },
-      "assignments_outstanding": { "name": "Assignments outstanding" },
-      "assignments_overdue": { "name": "Assignments overdue" },
-      "next_lesson": { "name": "Next lesson" },
-      "meal_balance": { "name": "Meal balance" },
-      "notices": { "name": "Notices" }
+      "attendance": {
+        "name": "Attendance"
+      },
+      "behaviour_points": {
+        "name": "Behaviour points"
+      },
+      "positive_points": {
+        "name": "Positive points"
+      },
+      "negative_points": {
+        "name": "Negative points"
+      },
+      "assignments_outstanding": {
+        "name": "Assignments outstanding"
+      },
+      "assignments_overdue": {
+        "name": "Assignments overdue"
+      },
+      "next_lesson": {
+        "name": "Next lesson"
+      },
+      "meal_balance": {
+        "name": "Meal balance"
+      },
+      "notices": {
+        "name": "Notices"
+      }
     },
     "binary_sensor": {
-      "school_today": { "name": "School today" },
-      "in_lesson": { "name": "In lesson" },
-      "has_overdue_assignments": { "name": "Overdue assignments" }
+      "school_today": {
+        "name": "School today"
+      },
+      "in_lesson": {
+        "name": "In lesson"
+      },
+      "has_overdue_assignments": {
+        "name": "Overdue assignments"
+      }
     },
     "calendar": {
-      "timetable": { "name": "Timetable" }
+      "timetable": {
+        "name": "Timetable"
+      }
     },
     "todo": {
-      "assignments": { "name": "Assignments" }
+      "assignments": {
+        "name": "Assignments"
+      }
     }
   },
   "services": {
@@ -76,7 +104,7 @@
     },
     "dump_page": {
       "name": "Dump page",
-      "description": "Return the raw JSON a portal page serves. Useful for reporting an issue when a sensor is empty.",
+      "description": "Return the structure of what a portal page serves, for reporting an issue when a sensor is empty. Values are omitted unless you ask for them.",
       "fields": {
         "config_entry_id": {
           "name": "Account",
@@ -84,7 +112,11 @@
         },
         "path": {
           "name": "Page path",
-          "description": "A portal path such as /guardians/home-ui/dashboard."
+          "description": "A portal path such as /guardians/student-ui/assignments/student-id/12345."
+        },
+        "include_values": {
+          "name": "Include values",
+          "description": "Return the payload itself rather than just its structure. This will contain your child's personal data, so do not share it."
         }
       }
     }

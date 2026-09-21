@@ -10,6 +10,11 @@ dump_page:
           integration: arbor
     path:
       required: true
-      example: "/guardians/home-ui/dashboard"
+      example: "/guardians/student-ui/assignments/student-id/12345"
       selector:
         text:
+    include_values:
+      required: false
+      default: false
+      selector:
+        boolean:

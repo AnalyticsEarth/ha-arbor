@@ -16,6 +16,7 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import ArborClient, ArborError
 from .const import (
+    ATTR_INCLUDE_VALUES,
     ATTR_PATH,
     CONF_BASE_URL,
     CONF_EMAIL,
@@ -29,6 +30,7 @@ from .const import (
     SERVICE_REFRESH,
 )
 from .coordinator import ArborCoordinator
+from .parser import describe_shape
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +47,9 @@ DUMP_PAGE_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
         vol.Required(ATTR_PATH): cv.string,
+        # Off by default: the structure is what diagnosing a parser needs, and it
+        # can be shared without exposing a child's data.
+        vol.Optional(ATTR_INCLUDE_VALUES, default=False): cv.boolean,
     }
 )
 
@@ -106,10 +111,12 @@ def _async_register_services(hass: HomeAssistant) -> None:
             await entry.runtime_data.async_request_refresh()
 
     async def async_dump_page(call: ServiceCall) -> ServiceResponse:
-        """Return the raw JSON tree for one portal page.
+        """Return what one portal page serves, for diagnosing an empty sensor.
 
-        This exists so a user can capture what their own school's portal serves
-        when a sensor comes back empty, without having to read Arbor's HTML.
+        By default only the *shape* comes back -- keys, nesting, list lengths and
+        each value's type and format -- which is what a parser has to be written
+        against and is safe to paste into an issue. Set ``include_values`` to get
+        the payload itself, which will contain your child's data.
         """
         entry_id = call.data["config_entry_id"]
         entry = hass.config_entries.async_get_entry(entry_id)
@@ -121,7 +128,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
             tree = await entry.runtime_data.client.async_fetch_absolute(call.data[ATTR_PATH])
         except ArborError as err:
             raise ServiceValidationError(str(err)) from err
-        return {"path": call.data[ATTR_PATH], "tree": tree}
+
+        if call.data[ATTR_INCLUDE_VALUES]:
+            return {"path": call.data[ATTR_PATH], "tree": tree}
+        return {"path": call.data[ATTR_PATH], "shape": describe_shape(tree)}
 
     hass.services.async_register(DOMAIN, SERVICE_REFRESH, async_refresh)
     hass.services.async_register(

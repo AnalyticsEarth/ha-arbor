@@ -48,6 +48,7 @@ from .parser import (
     extract_lessons_from_tables,
     extract_notices,
     extract_profile_fields,
+    extract_student_name,
     extract_student_refs,
     text_of,
     walk,
@@ -324,6 +325,19 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
         if not lessons and allow_shared_sources:
             lessons = extract_lessons_from_tables(trees[DATA_TIMETABLE])
         student.lessons = sorted(lessons, key=lambda lesson: lesson.sort_key)
+
+        # Discovery can find a child's id without ever seeing their name, when
+        # Arbor puts it in page data rather than a link caption. Look again in
+        # everything actually fetched for this child before settling for the
+        # "Student <id>" placeholder.
+        if student.name.startswith("Student "):
+            named = extract_student_name(
+                [tree for key, tree in student.raw.items() if key == "profile"]
+                or list(student.raw.values())
+            )
+            if named:
+                _LOGGER.debug("Resolved child %s to a name from page data", student.student_id)
+                student.name = named
 
         fields = extract_profile_fields(profile_trees)
         student.year_group = _field(fields, "year group", "year", "national curriculum year")

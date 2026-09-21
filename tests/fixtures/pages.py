@@ -329,3 +329,63 @@ DASHBOARD_WITH_LESSON_LINKS = {
         },
     ]
 }
+
+
+# The other dialect: no column definitions at all, just records. Keys stand in
+# for captions. Wrotham School's guardian pages are `-ui` routes that return
+# payloads like this rather than declared ExtJS grids.
+ASSIGNMENTS_RECORD_LIST = {
+    "success": True,
+    "assignments": [
+        {
+            "assignmentName": "Photosynthesis worksheet",
+            "subjectName": "Biology",
+            "dueDate": "2026-09-25T15:30:00",
+            "submissionStatus": "Not submitted",
+            "grade": None,
+            "setByStaffName": "Mrs J Okafor",
+        },
+        {
+            "assignmentName": "Macbeth Act 2 essay",
+            "subjectName": "English",
+            "dueDate": "2026-09-18T15:30:00",
+            "submissionStatus": "Submitted",
+            "grade": "B+",
+            "setByStaffName": "Mr T Hale",
+        },
+    ],
+}
+
+BEHAVIOUR_RECORD_LIST = {
+    "success": True,
+    "behaviourIncidents": [
+        {
+            "incidentDate": "2026-09-21",
+            "behaviourType": "Positive - Excellent work",
+            "points": 2,
+            "subjectName": "Biology",
+            "recordedByStaffName": "Mrs J Okafor",
+            "commentText": "Outstanding contribution",
+        },
+        {
+            "incidentDate": "2026-09-18",
+            "behaviourType": "Negative - Late to lesson",
+            "points": -1,
+            "subjectName": "Mathematics",
+            "recordedByStaffName": "Ms R Patel",
+            "commentText": "Eight minutes late",
+        },
+    ],
+}
+
+# A child's name as a record rather than a link caption.
+STUDENT_RECORD_PAGE = {
+    "success": True,
+    "student": {
+        "studentId": 40219,
+        "firstName": "Amelia",
+        "lastName": "Example",
+        "yearGroupName": "Year 9",
+        "registrationGroupName": "9BQ",
+    },
+}

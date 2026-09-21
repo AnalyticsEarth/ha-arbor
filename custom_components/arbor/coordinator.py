@@ -56,6 +56,10 @@ _LOGGER = logging.getLogger(__name__)
 # layout cannot turn one update into hundreds of requests.
 MAX_PAGES_PER_STUDENT = 12
 
+# More candidates than this almost certainly means discovery matched something
+# that is not a person.
+MAX_PLAUSIBLE_CHILDREN = 8
+
 # Domains that are worth a page fetch of their own.
 _FETCHED_DOMAINS = (
     DATA_ATTENDANCE,
@@ -145,6 +149,18 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
         else:
             # Guardian-wide pages show whichever child is selected, so they can
             # only be read as a child's own data when there is just one child.
+            if len(refs) > MAX_PLAUSIBLE_CHILDREN:
+                # Discovery has misfired before by mistaking portal links for
+                # people; say so loudly rather than inventing a dozen devices.
+                _LOGGER.warning(
+                    "Arbor discovery found %d children for this account, which is "
+                    "more than expected. Download the integration's diagnostics and "
+                    "check the profile URL shapes if these are not real children",
+                    len(refs),
+                )
+                data.warnings.append(
+                    f"Discovery found {len(refs)} children, which looks implausible."
+                )
             single_child = len(refs) == 1
             for ref in refs:
                 student = StudentData(

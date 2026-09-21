@@ -303,6 +303,73 @@ class TestStudentDiscovery(unittest.TestCase):
         refs = parser.extract_student_refs([pages.GUARDIAN_DASHBOARD])
         self.assertNotIn("View Student Profile", [ref.name for ref in refs])
 
+    def test_lesson_and_notice_links_are_not_children(self) -> None:
+        """Regression: "Current/Next/Previous lesson" became three children.
+
+        Those links carry a bare ``/id/<n>``, which is not a student id, and
+        their captions look superficially like two-word names.
+        """
+        refs = parser.extract_student_refs([pages.DASHBOARD_WITH_LESSON_LINKS])
+        self.assertEqual(
+            [(ref.student_id, ref.name) for ref in refs], [("40219", "Amelia Example")]
+        )
+
+    def test_bare_id_urls_carry_no_student_id(self) -> None:
+        for url in (
+            "/guardians/calendar-entry/view-event/id/8814023",
+            "/guardians/news-story/view/id/55012",
+            "/guardians/payments/invoice/id/771",
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(parser.student_id_in_url(url))
+
+    def test_explicit_student_ids_are_recognised(self) -> None:
+        for url, expected in (
+            ("/guardians/student-profile/index/student-id/40219", "40219"),
+            ("/guardians/attendance/index/student_id/40219", "40219"),
+            ("/guardians/students/40219/overview", "40219"),
+            ("/students/view/40219", "40219"),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(parser.student_id_in_url(url), expected)
+
+    def test_portal_vocabulary_is_never_a_name(self) -> None:
+        for caption in (
+            "Next lesson",
+            "Current lesson",
+            "Previous lesson",
+            "View Student Profile",
+            "My assignments",
+            "Meal balance",
+            "Report cards",
+            "This week",
+        ):
+            with self.subTest(caption=caption):
+                self.assertFalse(parser._looks_like_name(caption))
+
+    def test_real_names_still_pass(self) -> None:
+        for caption in (
+            "Amelia Example",
+            "Oliver Example",
+            "Siân O'Brien",
+            "Jean-Luc Picard",
+            "Mary Jane Watson-Parker",
+        ):
+            with self.subTest(caption=caption):
+                self.assertTrue(parser._looks_like_name(caption))
+
+    def test_a_child_is_found_even_without_a_usable_caption(self) -> None:
+        tree = {
+            "items": [
+                {
+                    "text": "View Student Profile",
+                    "url": "/guardians/student-profile/index/student-id/40219",
+                }
+            ]
+        }
+        refs = parser.extract_student_refs([tree])
+        self.assertEqual([(r.student_id, r.name) for r in refs], [("40219", "Student 40219")])
+
     def test_returns_nothing_when_there_are_no_student_links(self) -> None:
         self.assertEqual(parser.extract_student_refs([{"items": []}]), [])
 

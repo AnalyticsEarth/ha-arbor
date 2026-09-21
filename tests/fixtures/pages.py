@@ -284,3 +284,48 @@ PROFILE_PAGE = {
         }
     ]
 }
+
+
+# A dashboard whose timetable widget links each lesson to a calendar entry.
+# Every one of those URLs carries a bare `/id/<n>`, and captions like
+# "Next lesson" read like two-word names -- which is how an early version of
+# the parser turned three lessons into three children.
+DASHBOARD_WITH_LESSON_LINKS = {
+    "items": [
+        {
+            "xtype": "panel",
+            "title": "Timetable",
+            "items": [
+                {
+                    "text": "Previous lesson",
+                    "url": "/guardians/calendar-entry/view-event/id/8814021",
+                },
+                {
+                    "text": "Current lesson",
+                    "url": "/guardians/calendar-entry/view-event/id/8814022",
+                },
+                {
+                    "text": "Next lesson",
+                    "url": "/guardians/calendar-entry/view-event/id/8814023",
+                },
+            ],
+        },
+        {
+            "xtype": "panel",
+            "title": "Notices",
+            "items": [
+                {"text": "Sports day", "url": "/guardians/news-story/view/id/55012"},
+                {"text": "Term dates", "url": "/guardians/school-notice/view/id/55013"},
+            ],
+        },
+        {
+            "xtype": "container",
+            "items": [
+                {
+                    "text": "Amelia Example",
+                    "url": "/guardians/student-profile/index/student-id/40219",
+                }
+            ],
+        },
+    ]
+}

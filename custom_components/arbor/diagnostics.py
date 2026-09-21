@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
@@ -11,6 +12,21 @@ from . import ArborConfigEntry
 from .const import CONF_EMAIL, CONF_PASSWORD
 
 TO_REDACT = {CONF_EMAIL, CONF_PASSWORD}
+
+_DIGITS = re.compile(r"\d+")
+
+
+def _url_shape(url: str | None) -> str | None:
+    """A URL with every number masked.
+
+    The shape is what matters when discovery goes wrong -- seeing
+    ``/guardians/calendar-entry/view-event/id/<n>`` listed as a child says
+    immediately that lessons were mistaken for people -- while the masking keeps
+    the child's actual id out of the report.
+    """
+    if not url:
+        return None
+    return _DIGITS.sub("<n>", url)
 
 
 async def async_get_config_entry_diagnostics(
@@ -32,6 +48,8 @@ async def async_get_config_entry_diagnostics(
                 {
                     "student_id_hash": f"...{student_id[-3:]}",
                     "has_profile_url": student.profile_url is not None,
+                    "profile_url_shape": _url_shape(student.profile_url),
+                    "name_looks_like_a_person": not student.name.startswith("Student "),
                     "attendance_percentage_found": student.attendance.percentage is not None,
                     "behaviour_points_found": student.behaviour_points_net is not None,
                     "counts": {
@@ -55,7 +73,15 @@ async def async_get_config_entry_diagnostics(
             coordinator.update_interval.total_seconds() if coordinator.update_interval else None
         ),
         "last_update_success": coordinator.last_update_success,
-        "discovered_pages": data.discovered_pages if data else {},
+        "student_count": len(data.students) if data else 0,
+        "discovered_pages": (
+            {
+                domain: [_url_shape(url) for url in entries.values()]
+                for domain, entries in data.discovered_pages.items()
+            }
+            if data
+            else {}
+        ),
         "warnings": data.warnings if data else [],
         "students": students,
     }

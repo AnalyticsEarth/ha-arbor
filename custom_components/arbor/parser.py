@@ -953,40 +953,73 @@ def extract_notices(trees: list[Any]) -> list[Notice]:
 # students and navigation
 # ---------------------------------------------------------------------------
 
-_STUDENT_ID_RE = re.compile(
-    r"/(?:student-id|studentId|student|id)/(\d+)", re.IGNORECASE
+# Only an explicitly student-scoped id identifies a child. A bare `/id/<n>`
+# segment appears on nearly every Arbor URL -- calendar entries, notices,
+# payments -- so matching that turned any dashboard link into a "child".
+_STUDENT_ID_PATTERNS = (
+    re.compile(r"/student[-_]?id/(\d+)", re.IGNORECASE),
+    re.compile(r"/students?[-_]?profile/(?:[^/?]+/)*?id/(\d+)", re.IGNORECASE),
+    re.compile(r"/students?/(?:view/)?(\d+)(?=/|$|\?)", re.IGNORECASE),
 )
-_STUDENT_URL_HINTS = ("student", "guardian", "child")
-_NAME_RE = re.compile(r"^[\w'’\-\.]+(?:\s+[\w'’\-\.]+){1,4}$", re.UNICODE)
+
+_NAME_RE = re.compile(
+    r"^[^\W\d_][\w'’\-\.]*(?:\s+[^\W\d_][\w'’\-\.]*){1,4}$", re.UNICODE
+)
+
+# Vocabulary that appears in portal navigation but never in a person's name.
+# Checked word by word, so "Next lesson" is rejected while "Amelia Example" is
+# not -- a substring blocklist cannot tell those apart.
+_NON_NAME_WORDS = frozenset(
+    """
+    view views profile profiles dashboard home homepage log logout login signout
+    settings setting menu help support about contact
+    attendance absence absences attend present absent late
+    behaviour behavior conduct incident incidents point points
+    assignment assignments homework coursework task tasks due overdue submitted
+    calendar timetable schedule lesson lessons period periods session sessions
+    event events class classes subject subjects room rooms
+    payment payments invoice invoices shop basket checkout fee fees
+    trip trips club clubs activity activities booking bookings
+    meal meals lunch dinner catering balance account accounts credit topup
+    notice notices news bulletin message messages letter letters communication
+    report reports card cards exam exams examination examinations result results
+    progress attainment grade grades mark marks target level
+    current next previous last today tomorrow yesterday upcoming recent
+    week weeks term terms year years day days time times date dates
+    school student students child children guardian guardians parent parents
+    detail details more all summary overview page pages link click here back
+    add new edit update change remove delete cancel confirm save
+    my your our the and for with from
+    """.split()
+)
 
 
 def _looks_like_name(text: str) -> bool:
-    """Whether a link caption reads like a person's name."""
-    if not text or len(text) > 60:
+    """Whether a link caption reads like a person's name.
+
+    Deliberately strict: a false positive invents a child, which is far more
+    confusing than missing a name and falling back to "Student <id>".
+    """
+    if not text:
         return False
-    if any(char.isdigit() for char in text):
+    stripped = text.strip()
+    if len(stripped) > 60 or any(char.isdigit() for char in stripped):
         return False
-    lowered = text.casefold()
-    if any(
-        word in lowered
-        for word in (
-            "view",
-            "profile",
-            "dashboard",
-            "home",
-            "log out",
-            "logout",
-            "settings",
-            "menu",
-            "attendance",
-            "behaviour",
-            "assignment",
-            "calendar",
-            "payment",
-        )
-    ):
+    if not _NAME_RE.match(stripped):
         return False
-    return bool(_NAME_RE.match(text.strip()))
+    words = re.findall(r"[^\W\d_]+", stripped.casefold())
+    if not words:
+        return False
+    return not any(word in _NON_NAME_WORDS for word in words)
+
+
+def student_id_in_url(url: str) -> str | None:
+    """The child id a URL is explicitly scoped to, if any."""
+    for pattern in _STUDENT_ID_PATTERNS:
+        match = pattern.search(url)
+        if match:
+            return match.group(1)
+    return None
 
 
 @dataclass(slots=True)
@@ -996,27 +1029,39 @@ class StudentRef:
     student_id: str
     name: str
     url: str | None = None
+    #: Where the name came from, for diagnostics: "record", "link" or "fallback".
+    name_source: str = "fallback"
 
 
 def extract_student_refs(trees: list[Any]) -> list[StudentRef]:
     """Find the children this guardian can see.
 
-    Arbor exposes them as links into a student profile, so every URL carrying a
-    student id is a candidate and the best caption seen for each id wins.
+    Only URLs and records carrying an *explicitly* student-scoped id count. A
+    bare ``/id/<n>`` is not enough: it appears on calendar entries, notices and
+    payments too, and treating those as children produced entities named after
+    lessons rather than after people.
+
+    A record's own name beats a link caption, and any real name beats the
+    ``Student <id>`` placeholder.
     """
     by_id: dict[str, StudentRef] = {}
+    _RANK = {"fallback": 0, "link": 1, "record": 2}
 
-    def remember(student_id: str, name: str | None, url: str | None) -> None:
+    def remember(
+        student_id: str, name: str | None, url: str | None, source: str
+    ) -> None:
         existing = by_id.get(student_id)
         if existing is None:
             by_id[student_id] = StudentRef(
-                student_id=student_id, name=name or f"Student {student_id}", url=url
+                student_id=student_id,
+                name=name or f"Student {student_id}",
+                url=url,
+                name_source=source if name else "fallback",
             )
             return
-        if name and (
-            existing.name.startswith("Student ") or (_looks_like_name(name) and not _looks_like_name(existing.name))
-        ):
+        if name and _RANK[source] > _RANK[existing.name_source]:
             existing.name = name
+            existing.name_source = source
         if url and not existing.url:
             existing.url = url
 
@@ -1041,17 +1086,14 @@ def extract_student_refs(trees: list[Any]) -> list[StudentRef]:
                         name = candidate
                         break
             url = node.get("url") if isinstance(node.get("url"), str) else None
-            remember(student_id, name, url)
+            remember(student_id, name, url, "record" if name else "fallback")
 
         for link in find_links(tree):
-            match = _STUDENT_ID_RE.search(link.url)
-            if not match:
-                continue
-            lowered = link.url.casefold()
-            if not any(hint in lowered for hint in _STUDENT_URL_HINTS):
+            student_id = student_id_in_url(link.url)
+            if student_id is None:
                 continue
             name = link.text if _looks_like_name(link.text) else None
-            remember(match.group(1), name, link.url)
+            remember(student_id, name, link.url, "link" if name else "fallback")
 
     return sorted(by_id.values(), key=lambda ref: ref.name)
 
@@ -1110,9 +1152,9 @@ def filter_pages_for_student(
     filtered: dict[str, dict[str, str]] = {}
     for domain, entries in pages.items():
         for caption, url in entries.items():
-            match = _STUDENT_ID_RE.search(url)
-            if match is not None:
-                if match.group(1) != student_id:
+            url_student_id = student_id_in_url(url)
+            if url_student_id is not None:
+                if url_student_id != student_id:
                     continue
             elif not keep_unscoped:
                 continue

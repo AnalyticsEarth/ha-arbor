@@ -1,0 +1,92 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Arbor parent portal",
+        "description": "Sign in with the same email address and password you use for the Arbor Parent Portal.",
+        "data": {
+          "email": "Email address",
+          "password": "Password"
+        }
+      },
+      "school": {
+        "title": "Choose a school",
+        "description": "This Arbor account has children at more than one school. Add one school now; you can add the others afterwards.",
+        "data": {
+          "base_url": "School"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with Arbor",
+        "description": "Arbor rejected the stored password for {email}. Enter the current password to reconnect.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach Arbor. Check your internet connection and try again.",
+      "invalid_auth": "Arbor did not accept that email address and password.",
+      "unknown": "Something unexpected went wrong. Check the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "That Arbor account is already set up for this school.",
+      "reauth_successful": "Arbor reconnected successfully."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Arbor options",
+        "description": "Arbor updates a few times a day at most, so there is little to gain from polling frequently.",
+        "data": {
+          "scan_interval_minutes": "Update interval"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "attendance": { "name": "Attendance" },
+      "behaviour_points": { "name": "Behaviour points" },
+      "positive_points": { "name": "Positive points" },
+      "negative_points": { "name": "Negative points" },
+      "assignments_outstanding": { "name": "Assignments outstanding" },
+      "assignments_overdue": { "name": "Assignments overdue" },
+      "next_lesson": { "name": "Next lesson" },
+      "meal_balance": { "name": "Meal balance" },
+      "notices": { "name": "Notices" }
+    },
+    "binary_sensor": {
+      "school_today": { "name": "School today" },
+      "in_lesson": { "name": "In lesson" },
+      "has_overdue_assignments": { "name": "Overdue assignments" }
+    },
+    "calendar": {
+      "timetable": { "name": "Timetable" }
+    },
+    "todo": {
+      "assignments": { "name": "Assignments" }
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "Refresh",
+      "description": "Fetch the latest data from Arbor for every configured account."
+    },
+    "dump_page": {
+      "name": "Dump page",
+      "description": "Return the raw JSON a portal page serves. Useful for reporting an issue when a sensor is empty.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Account",
+          "description": "The Arbor account to query."
+        },
+        "path": {
+          "name": "Page path",
+          "description": "A portal path such as /guardians/home-ui/dashboard."
+        }
+      }
+    }
+  }
+}

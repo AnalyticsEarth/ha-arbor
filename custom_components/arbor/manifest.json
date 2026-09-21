@@ -1,0 +1,12 @@
+{
+  "domain": "arbor",
+  "name": "Arbor Education",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/AnalyticsEarth/ha-arbor",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/AnalyticsEarth/ha-arbor/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

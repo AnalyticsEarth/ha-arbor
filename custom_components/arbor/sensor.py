@@ -1,0 +1,312 @@
+"""Sensors for the Arbor integration."""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Any
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
+)
+from homeassistant.const import PERCENTAGE
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from . import ArborConfigEntry
+from .coordinator import ArborCoordinator
+from .entity import ArborStudentEntity
+from .models import Assignment, BehaviourIncident, Lesson, StudentData
+
+_LOGGER = logging.getLogger(__name__)
+
+# How many list items to publish as attributes. Home Assistant stores attributes
+# in the state machine and recorder, so an unbounded list is a real cost.
+MAX_LIST_ATTRIBUTES = 25
+
+
+def _iso(value: datetime | date | None) -> str | None:
+    """ISO-format a date or datetime for an attribute."""
+    return value.isoformat() if value is not None else None
+
+
+def _assignment_attrs(items: list[Assignment]) -> list[dict[str, Any]]:
+    return [
+        {
+            "title": item.title,
+            "subject": item.subject,
+            "due": _iso(item.due),
+            "status": item.status,
+            "grade": item.grade,
+            "teacher": item.teacher,
+            "overdue": item.is_overdue,
+        }
+        for item in items[:MAX_LIST_ATTRIBUTES]
+    ]
+
+
+def _incident_attrs(items: list[BehaviourIncident]) -> list[dict[str, Any]]:
+    return [
+        {
+            "date": _iso(item.occurred),
+            "type": item.kind,
+            "points": item.points,
+            "subject": item.subject,
+            "staff": item.staff,
+            "comment": item.comment,
+            "positive": item.is_positive,
+        }
+        for item in items[:MAX_LIST_ATTRIBUTES]
+    ]
+
+
+def _lesson_attrs(items: list[Lesson]) -> list[dict[str, Any]]:
+    return [
+        {
+            "summary": item.summary,
+            "start": _iso(item.start),
+            "end": _iso(item.end),
+            "date": _iso(item.all_day_on),
+            "location": item.location,
+            "teacher": item.teacher,
+        }
+        for item in items[:MAX_LIST_ATTRIBUTES]
+    ]
+
+
+@dataclass(frozen=True, kw_only=True)
+class ArborSensorDescription(SensorEntityDescription):
+    """Describes one Arbor sensor."""
+
+    value_fn: Callable[[StudentData], Any]
+    attributes_fn: Callable[[StudentData], dict[str, Any]] | None = None
+    unit_fn: Callable[[StudentData], str | None] | None = None
+
+
+def _attendance_attrs(student: StudentData) -> dict[str, Any]:
+    summary = student.attendance
+    return {
+        "present_sessions": summary.present_sessions,
+        "authorised_absences": summary.authorised_absences,
+        "unauthorised_absences": summary.unauthorised_absences,
+        "late_sessions": summary.late_sessions,
+        "period": summary.period,
+    }
+
+
+def _next_lesson_value(student: StudentData) -> str | None:
+    lesson = student.next_lesson
+    return lesson.summary if lesson else None
+
+
+def _next_lesson_attrs(student: StudentData) -> dict[str, Any]:
+    lesson = student.next_lesson
+    if lesson is None:
+        return {"lessons_today": 0}
+    today = date.today()
+    return {
+        "start": _iso(lesson.start),
+        "end": _iso(lesson.end),
+        "location": lesson.location,
+        "teacher": lesson.teacher,
+        "lessons_today": sum(
+            1
+            for item in student.lessons
+            if (item.start.date() if item.start else item.all_day_on) == today
+        ),
+        "upcoming": _lesson_attrs(
+            [item for item in student.lessons if item.start and item.start >= datetime.now()]
+        ),
+    }
+
+
+def _balance_value(student: StudentData) -> float | None:
+    account = student.primary_account
+    return account.balance if account else None
+
+
+def _balance_attrs(student: StudentData) -> dict[str, Any]:
+    return {
+        "accounts": [
+            {"name": account.name, "balance": account.balance, "currency": account.currency}
+            for account in student.accounts[:MAX_LIST_ATTRIBUTES]
+        ]
+    }
+
+
+# A monetary sensor must always report a unit, even before the first balance
+# has been scraped. Arbor tenants are UK schools, so sterling is the default.
+_CURRENCY_SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
+
+
+def _balance_unit(student: StudentData) -> str:
+    account = student.primary_account
+    currency = account.currency if account else "GBP"
+    return _CURRENCY_SYMBOLS.get(currency, currency)
+
+
+SENSORS: tuple[ArborSensorDescription, ...] = (
+    ArborSensorDescription(
+        key="attendance",
+        translation_key="attendance",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        icon="mdi:calendar-check",
+        value_fn=lambda student: student.attendance.percentage,
+        attributes_fn=_attendance_attrs,
+    ),
+    ArborSensorDescription(
+        key="behaviour_points",
+        translation_key="behaviour_points",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:scale-balance",
+        value_fn=lambda student: student.behaviour_points_net,
+        attributes_fn=lambda student: {
+            "positive_points": student.behaviour_points_positive,
+            "negative_points": student.behaviour_points_negative,
+            "incident_count": len(student.behaviour_incidents),
+            "recent_incidents": _incident_attrs(student.behaviour_incidents),
+        },
+    ),
+    ArborSensorDescription(
+        key="positive_points",
+        translation_key="positive_points",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:thumb-up-outline",
+        value_fn=lambda student: student.behaviour_points_positive,
+    ),
+    ArborSensorDescription(
+        key="negative_points",
+        translation_key="negative_points",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:thumb-down-outline",
+        value_fn=lambda student: student.behaviour_points_negative,
+    ),
+    ArborSensorDescription(
+        key="assignments_outstanding",
+        translation_key="assignments_outstanding",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:notebook-edit-outline",
+        value_fn=lambda student: len(student.outstanding_assignments),
+        attributes_fn=lambda student: {
+            "total": len(student.assignments),
+            "overdue": len(student.overdue_assignments),
+            "assignments": _assignment_attrs(student.outstanding_assignments),
+        },
+    ),
+    ArborSensorDescription(
+        key="assignments_overdue",
+        translation_key="assignments_overdue",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:alert-outline",
+        value_fn=lambda student: len(student.overdue_assignments),
+        attributes_fn=lambda student: {
+            "assignments": _assignment_attrs(student.overdue_assignments)
+        },
+    ),
+    ArborSensorDescription(
+        key="next_lesson",
+        translation_key="next_lesson",
+        icon="mdi:timetable",
+        value_fn=_next_lesson_value,
+        attributes_fn=_next_lesson_attrs,
+    ),
+    ArborSensorDescription(
+        key="meal_balance",
+        translation_key="meal_balance",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL,
+        suggested_display_precision=2,
+        icon="mdi:food-apple-outline",
+        value_fn=_balance_value,
+        attributes_fn=_balance_attrs,
+        unit_fn=_balance_unit,
+    ),
+    ArborSensorDescription(
+        key="notices",
+        translation_key="notices",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:bulletin-board",
+        value_fn=lambda student: len(student.notices),
+        attributes_fn=lambda student: {
+            "notices": [
+                {
+                    "title": notice.title,
+                    "published": _iso(notice.published),
+                    "body": notice.body,
+                }
+                for notice in student.notices[:MAX_LIST_ATTRIBUTES]
+            ]
+        },
+    ),
+)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ArborConfigEntry, async_add_entities: AddEntitiesCallback
+) -> None:
+    """Set up Arbor sensors, adding entities for children found later too."""
+    coordinator = entry.runtime_data
+    known: set[str] = set()
+
+    @callback
+    def _add_new_students() -> None:
+        if coordinator.data is None:
+            return
+        new = [
+            ArborSensor(coordinator, student_id, description)
+            for student_id in coordinator.data.students
+            if student_id not in known
+            for description in SENSORS
+        ]
+        known.update(coordinator.data.students)
+        if new:
+            async_add_entities(new)
+
+    _add_new_students()
+    entry.async_on_unload(coordinator.async_add_listener(_add_new_students))
+
+
+class ArborSensor(ArborStudentEntity, SensorEntity):
+    """A single reported value about one child."""
+
+    entity_description: ArborSensorDescription
+
+    def __init__(
+        self,
+        coordinator: ArborCoordinator,
+        student_id: str,
+        description: ArborSensorDescription,
+    ) -> None:
+        """Set up the sensor from its description."""
+        super().__init__(coordinator, student_id, description.key)
+        self.entity_description = description
+
+    @property
+    def native_value(self) -> Any:
+        """The sensor's current value."""
+        student = self.student
+        if student is None:
+            return None
+        return self.entity_description.value_fn(student)
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        """Unit, resolved at runtime for the currency sensors."""
+        if self.entity_description.unit_fn is not None and (student := self.student):
+            return self.entity_description.unit_fn(student)
+        return self.entity_description.native_unit_of_measurement
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Supporting detail behind the value."""
+        student = self.student
+        if student is None or self.entity_description.attributes_fn is None:
+            return None
+        return self.entity_description.attributes_fn(student)

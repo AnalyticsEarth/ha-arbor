@@ -1,0 +1,15 @@
+refresh:
+  fields: {}
+
+dump_page:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: arbor
+    path:
+      required: true
+      example: "/guardians/home-ui/dashboard"
+      selector:
+        text:

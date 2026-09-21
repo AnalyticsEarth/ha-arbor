@@ -107,6 +107,24 @@ The three portal homepages, all named in the same bundle, are:
 | `/students/home-ui/dashboard` | students |
 | `/home-ui/index` | school staff |
 
+### Only the login step can be an authentication failure
+
+A dead session and a resource the account may not see are indistinguishable on
+the wire: both arrive as a 403, or as the HTML shell with a 200. But logging in
+is what validates credentials -- it returns `logged_in: true` with a session
+cookie, or it fails outright. So once a fresh login has succeeded, any later
+denial is about the *resource*, never the password.
+
+The client therefore re-authenticates once on a denial, and after that treats a
+denial as "Arbor does not offer this to this account", skipping it. Only the
+login handshake raises an authentication error. Getting this wrong takes the
+whole integration down and asks the user to re-enter a password that was never
+wrong -- for example `/calendar-entry/list-static`, which guardians cannot call
+at all.
+
+Refusals are remembered for the rest of the day so they are not re-requested on
+every refresh, with date segments masked so the key survives midnight.
+
 ### A refused page is HTTP 200 with a JSON error
 
 A page the account may not see comes back `200` with

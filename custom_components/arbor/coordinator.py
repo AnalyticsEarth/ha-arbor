@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, timedelta
 from typing import Any
 
@@ -11,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import ArborAuthError, ArborClient, ArborError
+from .api import ArborAuthError, ArborClient, ArborError, ArborNotAvailableError
 from .const import (
     ALL_DATA_DOMAINS,
     CALENDAR_DATA_PATH,
@@ -98,6 +99,10 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
         # Calendar endpoint shapes that answered last time, so the ones Arbor
         # rejects are not retried on every refresh.
         self._calendar_templates_cache: list[tuple[str, str]] = []
+        # Endpoints Arbor has refused for this account, so they are not requested
+        # again. Rebuilt daily in case the school switches a feature on.
+        self._unavailable: set[str] = set()
+        self._unavailable_day: date | None = None
 
     async def _async_update_data(self) -> ArborData:
         """Run one full refresh."""
@@ -112,6 +117,7 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
 
     async def _async_scrape(self) -> ArborData:
         data = ArborData()
+        self._forget_stale_refusals()
 
         settings = await self._try_json(CURRENT_USER_SETTINGS_PATH)
         if settings is not None:
@@ -335,25 +341,59 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
 
     # -- tolerant fetch helpers ---------------------------------------------
 
-    async def _try_page(self, path: str) -> Any | None:
-        """Fetch a portal page, returning None when it is unavailable."""
+    def _forget_stale_refusals(self) -> None:
+        """Re-probe refused endpoints once a day.
+
+        A school can switch a portal feature on at any time, so a refusal is
+        remembered to save requests, not treated as permanent.
+        """
+        today = date.today()
+        if self._unavailable_day != today:
+            self._unavailable.clear()
+            self._unavailable_day = today
+
+    async def _try(self, path: str, fetch: Any, label: str) -> Any | None:
+        """Fetch something optional, remembering what Arbor refuses.
+
+        Only :class:`ArborAuthError` escapes, and after the login rework that can
+        only come from the login handshake itself -- so a single forbidden
+        endpoint can no longer take the whole integration down.
+        """
+        key = _endpoint_key(path)
+        if key in self._unavailable:
+            return None
         try:
-            return await self.client.async_fetch_absolute(path)
+            return await fetch(path)
         except ArborAuthError:
             raise
-        except ArborError as err:
-            _LOGGER.debug("Skipping Arbor page %s: %s", path, err)
+        except ArborNotAvailableError as err:
+            _LOGGER.debug("Arbor does not offer %s %s: %s", label, path, err)
+            self._unavailable.add(key)
             return None
+        except ArborError as err:
+            # Transient: worth trying again on the next refresh.
+            _LOGGER.debug("Skipping Arbor %s %s: %s", label, path, err)
+            return None
+
+    async def _try_page(self, path: str) -> Any | None:
+        """Fetch a portal page, returning None when it is unavailable."""
+        return await self._try(path, self.client.async_fetch_absolute, "page")
 
     async def _try_json(self, path: str) -> Any | None:
         """Fetch a JSON endpoint, returning None when it is unavailable."""
-        try:
-            return await self.client.async_fetch_json(path)
-        except ArborAuthError:
-            raise
-        except ArborError as err:
-            _LOGGER.debug("Skipping Arbor endpoint %s: %s", path, err)
-            return None
+        return await self._try(path, self.client.async_fetch_json, "endpoint")
+
+
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _endpoint_key(path: str) -> str:
+    """A refusal key that survives the date rolling over.
+
+    Only date-like segments are masked. Student ids are left intact, because one
+    child being denied a page says nothing about their sibling.
+    """
+    return _ISO_DATE.sub("<date>", path)
 
 
 def _first_text(tree: Any, keys: tuple[str, ...]) -> str | None:

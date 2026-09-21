@@ -74,3 +74,48 @@ def build_page_url(base_url: str, path: str, format_flag: str) -> str:
         return f"{base_url}{route}"
     separator = "&" if "?" in route else "?"
     return f"{base_url}{route}{separator}{format_flag}"
+
+
+# How a response to an authenticated page request should be treated.
+RESPONSE_OK = "ok"
+#: The session looks dead; log in again and retry once.
+RESPONSE_SESSION_STALE = "session_stale"
+#: Arbor will not serve this to this account; skip it and carry on.
+RESPONSE_NOT_AVAILABLE = "not_available"
+#: Arbor itself is unhappy; worth retrying on a later refresh.
+RESPONSE_SERVER_ERROR = "server_error"
+
+
+def classify_response(status: int, body: str, *, retried: bool) -> str:
+    """Decide what a page response means.
+
+    The important distinction is between a dead *session* and a resource this
+    account may not see. They look identical on the wire -- both a 403 and the
+    HTML shell -- but only the first is worth re-authenticating for.
+
+    Logging in is what validates credentials: it returns ``logged_in: true`` and
+    a session cookie or it fails outright. So once a fresh login has happened,
+    a denial can only be about the resource, never the password. Treating it as
+    an authentication failure takes the whole integration down and asks the user
+    to re-enter a password that was never wrong.
+    """
+    if status in (401, 403) or looks_like_html(body):
+        return RESPONSE_SESSION_STALE if not retried else RESPONSE_NOT_AVAILABLE
+    if status == 404:
+        return RESPONSE_NOT_AVAILABLE
+    if status >= 400:
+        return RESPONSE_SERVER_ERROR
+    return RESPONSE_OK
+
+
+def refusal_message(payload: object) -> str | None:
+    """The reason Arbor gives for refusing a page, if it refused one.
+
+    A page the account may not see comes back ``200`` with a JSON body of
+    ``{"success": false, "message": "User is not allowed to access ..."}``
+    rather than an error status.
+    """
+    if isinstance(payload, dict) and payload.get("success") is False:
+        message = payload.get("message")
+        return str(message) if message else "no reason given"
+    return None

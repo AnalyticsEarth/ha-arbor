@@ -25,9 +25,13 @@ from .const import (
     SCHOOL_SEARCH_PATH,
 )
 from .http_util import (
+    RESPONSE_NOT_AVAILABLE,
+    RESPONSE_SERVER_ERROR,
+    RESPONSE_SESSION_STALE,
     build_page_url,
-    looks_like_html,
+    classify_response,
     normalise_base_url,
+    refusal_message,
     strip_json_prefix,
     strip_route_prefix,
 )
@@ -61,6 +65,14 @@ class ArborAuthError(ArborError):
 
 class ArborNoSchoolsError(ArborAuthError):
     """The email address is not associated with any Arbor tenant."""
+
+
+class ArborNotAvailableError(ArborError):
+    """Arbor will not serve this page or endpoint to this account.
+
+    Distinct from :class:`ArborAuthError`: the credentials are good, this
+    particular resource is simply not on offer. Callers skip it.
+    """
 
 
 class ArborClient:
@@ -270,13 +282,13 @@ class ArborClient:
     def page_url(self, path: str) -> str:
         """Build the JSON URL for a portal page path such as ``/guardians/...``."""
         if self._base_url is None:
-            raise ArborAuthError("No Arbor school selected yet")
+            raise ArborError("No Arbor school selected yet")
         return build_page_url(self._base_url, path, FORMAT_JAVASCRIPT)
 
     def endpoint_url(self, path: str) -> str:
         """Build the URL for a direct ``/format/json`` style endpoint."""
         if self._base_url is None:
-            raise ArborAuthError("No Arbor school selected yet")
+            raise ArborError("No Arbor school selected yet")
         route = path if path.startswith("/") else f"/{path}"
         return f"{self._base_url}{route}"
 
@@ -295,7 +307,7 @@ class ArborClient:
         in a scraped page can never redirect us off the school's own domain.
         """
         if self._base_url is None:
-            raise ArborAuthError("No Arbor school selected yet")
+            raise ArborError("No Arbor school selected yet")
         candidate = strip_route_prefix(url.strip())
         if candidate.startswith("//"):
             # Protocol-relative: not ours, and not a portal route either.
@@ -328,25 +340,20 @@ class ArborClient:
         except aiohttp.ClientError as err:
             raise ArborConnectionError(f"Error fetching {description}: {err}") from err
 
-        if status in (401, 403) or looks_like_html(body):
-            if not _retried:
-                _LOGGER.debug("Arbor session looks stale for %s, logging in again", description)
-                self._logged_in = False
-                await self.async_login()
-                return await self._fetch(url, description=description, _retried=True)
-            if status in (401, 403):
-                raise ArborAuthError(f"Arbor denied access to {description}")
-            # Logging in validated the credentials and issued a session cookie,
-            # so a shell response here is not an authentication problem -- the
-            # request itself was not one Arbor recognises as a page.
-            raise ArborError(
-                f"Arbor served the application shell rather than data for {description}; "
-                "the request was not recognised as a portal page"
+        verdict = classify_response(status, body, retried=_retried)
+
+        if verdict == RESPONSE_SESSION_STALE:
+            _LOGGER.debug("Arbor session looks stale for %s, logging in again", description)
+            self._logged_in = False
+            await self.async_login()
+            return await self._fetch(url, description=description, _retried=True)
+
+        if verdict == RESPONSE_NOT_AVAILABLE:
+            raise ArborNotAvailableError(
+                f"Arbor will not serve {description} to this account (HTTP {status})"
             )
 
-        if status == 404:
-            raise ArborError(f"Arbor has no {description} for this account")
-        if status >= 400:
+        if verdict == RESPONSE_SERVER_ERROR:
             raise ArborConnectionError(f"Arbor returned HTTP {status} for {description}")
 
         if not body.strip():
@@ -358,10 +365,7 @@ class ArborClient:
                 f"Arbor returned unparseable JSON for {description}"
             ) from err
 
-        # Arbor reports a page the account may not see as 200 with a JSON error,
-        # e.g. {"success": false, "message": "User is not allowed to access ..."}.
-        if isinstance(payload, dict) and payload.get("success") is False:
-            message = payload.get("message") or "no reason given"
-            raise ArborError(f"Arbor refused {description}: {message}")
+        if (refusal := refusal_message(payload)) is not None:
+            raise ArborNotAvailableError(f"Arbor refused {description}: {refusal}")
 
         return payload

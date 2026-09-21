@@ -139,5 +139,88 @@ class TestBuildPageUrl(unittest.TestCase):
         )
 
 
+class TestClassifyResponse(unittest.TestCase):
+    """A dead session and a forbidden resource look identical on the wire."""
+
+    SHELL = '<!DOCTYPE html>\n<html lang="en">'
+    JSON = '{"success": true, "items": []}'
+
+    def test_a_good_response_is_ok(self) -> None:
+        self.assertEqual(
+            http_util.classify_response(200, self.JSON, retried=False),
+            http_util.RESPONSE_OK,
+        )
+
+    def test_first_denial_is_treated_as_a_stale_session(self) -> None:
+        for status, body in ((401, ""), (403, ""), (200, self.SHELL)):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    http_util.classify_response(status, body, retried=False),
+                    http_util.RESPONSE_SESSION_STALE,
+                )
+
+    def test_denial_after_a_fresh_login_is_not_an_auth_problem(self) -> None:
+        """The regression: a 403 here used to take the integration down.
+
+        Logging in is what validates credentials, so once it has just succeeded a
+        denial can only be about the resource.
+        """
+        for status, body in ((401, ""), (403, ""), (200, self.SHELL)):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    http_util.classify_response(status, body, retried=True),
+                    http_util.RESPONSE_NOT_AVAILABLE,
+                )
+
+    def test_missing_pages_are_skipped_not_retried(self) -> None:
+        self.assertEqual(
+            http_util.classify_response(404, "", retried=False),
+            http_util.RESPONSE_NOT_AVAILABLE,
+        )
+
+    def test_server_errors_are_worth_retrying(self) -> None:
+        for status in (500, 502, 503):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    http_util.classify_response(status, "", retried=False),
+                    http_util.RESPONSE_SERVER_ERROR,
+                )
+
+    def test_a_429_is_a_server_condition_not_an_auth_failure(self) -> None:
+        self.assertEqual(
+            http_util.classify_response(429, "", retried=True),
+            http_util.RESPONSE_SERVER_ERROR,
+        )
+
+
+class TestRefusalMessage(unittest.TestCase):
+    """Arbor refuses a page with HTTP 200 and a JSON body."""
+
+    def test_reads_the_reason(self) -> None:
+        self.assertEqual(
+            http_util.refusal_message(
+                {
+                    "success": False,
+                    "message": "User is not allowed to access mvc:default/navigation/main-menu",
+                }
+            ),
+            "User is not allowed to access mvc:default/navigation/main-menu",
+        )
+
+    def test_handles_a_refusal_with_no_reason(self) -> None:
+        self.assertEqual(http_util.refusal_message({"success": False}), "no reason given")
+
+    def test_a_successful_payload_is_not_a_refusal(self) -> None:
+        for payload in (
+            {"success": True, "items": []},
+            {"items": []},
+            [],
+            None,
+            "text",
+        ):
+            with self.subTest(payload=payload):
+                self.assertIsNone(http_util.refusal_message(payload))
+
+
 if __name__ == "__main__":
     unittest.main()

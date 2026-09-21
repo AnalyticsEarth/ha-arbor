@@ -43,6 +43,7 @@ from .const import (
 from .models import ArborData, StudentData
 from .parser import (
     classify_pages,
+    extract_content_urls,
     filter_pages_for_student,
     extract_accounts,
     extract_assignments,
@@ -73,9 +74,18 @@ HOMEPAGE_CANDIDATES = (
     STAFF_HOME_PAGE,
 )
 
-# Upper bound on pages fetched per child per refresh, so an unusual portal
-# layout cannot turn one update into hundreds of requests.
-MAX_PAGES_PER_STUDENT = 12
+# Upper bound on requests per child per refresh, so an unusual portal layout
+# cannot turn one update into hundreds of requests. Covers discovered pages and
+# the content those pages load.
+MAX_REQUESTS_PER_STUDENT = 24
+
+# Arbor's guardian pages return a layout whose components fetch their own
+# content, so a page has to be followed to reach any data. Two levels is enough
+# for every layout seen; more would risk walking the whole portal.
+MAX_CONTENT_DEPTH = 2
+
+# Content URLs to follow from any single page.
+MAX_CONTENT_PER_PAGE = 4
 
 # More candidates than this almost certainly means discovery matched something
 # that is not a person.
@@ -283,22 +293,25 @@ class ArborScraper:
         for domain, entries in self._page_cache.get(student.student_id, {}).items():
             pages.setdefault(domain, {}).update(entries)
 
-        fetched = 0
+        budget = _Budget(MAX_REQUESTS_PER_STUDENT)
+        visited: set[str] = set()
         resolved: dict[str, dict[str, str]] = {}
         for domain in _FETCHED_DOMAINS:
             for caption, url in list(pages.get(domain, {}).items()):
-                if fetched >= MAX_PAGES_PER_STUDENT:
+                if budget.spent:
                     break
-                tree = await self._try_page(url)
-                fetched += 1
-                if tree is None:
+                fetched = await self._fetch_with_content(url, budget, visited)
+                if not fetched:
                     continue
                 resolved.setdefault(domain, {})[caption] = url
-                trees[domain].append(tree)
-                student.raw[f"{domain}:{caption}"] = tree
-            if fetched >= MAX_PAGES_PER_STUDENT:
+                trees[domain].extend(fetched)
+                for index, tree in enumerate(fetched):
+                    label = caption if index == 0 else f"{caption} > content {index}"
+                    student.raw[f"{domain}:{label}"] = tree
+            if budget.spent:
                 self._log.debug(
-                    "Reached the per-student page limit for %s; skipping remaining pages",
+                    "Reached the per-student request limit for %s; "
+                    "skipping remaining pages",
                     student.name,
                 )
                 break
@@ -400,6 +413,36 @@ class ArborScraper:
         )
         return [(base, suffixes) for base in (CALENDAR_DATA_PATH, CALENDAR_ENTRY_LIST_PATH)]
 
+    async def _fetch_with_content(
+        self,
+        path: str,
+        budget: "_Budget",
+        visited: set[str],
+        depth: int = 0,
+    ) -> list[Any]:
+        """Fetch a page and whatever its components load, depth-first.
+
+        Returns the page first, then each piece of content, so a caller can tell
+        the layout from the data.
+        """
+        if path in visited or budget.spent:
+            return []
+        visited.add(path)
+        budget.charge()
+
+        tree = await self._try_page(path)
+        if tree is None:
+            return []
+        trees = [tree]
+        if depth >= MAX_CONTENT_DEPTH:
+            return trees
+
+        for url in extract_content_urls(tree)[:MAX_CONTENT_PER_PAGE]:
+            if budget.spent:
+                break
+            trees.extend(await self._fetch_with_content(url, budget, visited, depth + 1))
+        return trees
+
     # -- tolerant fetch helpers ---------------------------------------------
 
     def _forget_stale_refusals(self) -> None:
@@ -442,6 +485,20 @@ class ArborScraper:
     async def _try_json(self, path: str) -> Any | None:
         """Fetch a JSON endpoint, returning None when it is unavailable."""
         return await self._try(path, self._fetch_json, "endpoint")
+
+
+class _Budget:
+    """A simple request allowance, so following content cannot run away."""
+
+    def __init__(self, allowance: int) -> None:
+        self._remaining = allowance
+
+    @property
+    def spent(self) -> bool:
+        return self._remaining <= 0
+
+    def charge(self) -> None:
+        self._remaining -= 1
 
 
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")

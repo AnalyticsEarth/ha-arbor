@@ -441,3 +441,127 @@ CURRENT_USER_SETTINGS = {
     "action_params": [],
     "notifications": [],
 }
+
+
+# Wrotham School's actual architecture: a guardian data page returns a layout
+# only. The real content sits behind a url in a component's props, and the
+# per-student navigation lives in subNav with each field wrapped as
+# {"value": ...}. Reading just the page finds no data whatever the parser does.
+SHELL_PAGE_WITH_CONTENT_URL = {
+    "type": "page",
+    "content": [
+        {
+            "componentName": "Arbor.container.LayoutColumn",
+            "type": "component",
+            "content": [
+                {
+                    "componentName": "Arbor.button.LoadPage",
+                    "props": {
+                        "ui": "plain",
+                        "text": "View all",
+                        "role": "load-page",
+                        "pageUrl": "/guardians/student-ui/assignments-content/student-id/1879",
+                        "v2": True,
+                    },
+                    "xtype": "mis-button-load-page",
+                }
+            ],
+            "xtype": "mis-layoutcolumn",
+            "props": {
+                "columnTitle": {"title": "Assignments", "tooltip": None},
+                "formActions": [],
+            },
+        }
+    ],
+    "subNav": {
+        "props": {
+            "componentName": "Arbor.container.SubNav",
+            "type": "component",
+            "content": None,
+            "props": {
+                "id": "sub-nav",
+                "treeData": {
+                    "items": [
+                        {
+                            "expanded": False,
+                            "fields": {
+                                "text": {"value": "Behaviour"},
+                                "url": {
+                                    "value": "/guardians/behaviour-ui/student-behaviour/student-id/1879"
+                                },
+                                "selected": {"value": False},
+                                "id": {"value": 2},
+                            },
+                            "leaf": True,
+                        },
+                        {
+                            "expanded": False,
+                            "fields": {
+                                "text": {"value": "Attendance"},
+                                "url": {
+                                    "value": "/guardians/student-ui/recent-attendance/student-id/1879"
+                                },
+                                "selected": {"value": False},
+                                "id": {"value": 3},
+                            },
+                            "leaf": True,
+                        },
+                    ]
+                },
+                "label": "Student profile",
+            },
+            "xtype": "mis-subnavcolumn",
+        }
+    },
+    "helpCentreUrl": "https://support.arbor-education.com/",
+    "navigation": None,
+}
+
+# What that content URL returns: the data the page itself never carried.
+ASSIGNMENTS_CONTENT = {
+    "type": "component",
+    "componentName": "Arbor.table.Assignments",
+    "props": {
+        "rows": [
+            {
+                "name": "Photosynthesis worksheet",
+                "subject": "Biology",
+                "dueDate": "2026-09-25",
+                "status": "Not submitted",
+                "mark": None,
+            },
+            {
+                "name": "Macbeth Act 2 essay",
+                "subject": "English",
+                "dueDate": "2026-09-18",
+                "status": "Submitted",
+                "mark": "B+",
+            },
+        ]
+    },
+}
+
+# A KPI panel names its content with `url` rather than `pageUrl`.
+KPI_SHELL_PAGE = {
+    "type": "page",
+    "content": [
+        {
+            "componentName": "Arbor.container.LayoutColumn",
+            "type": "component",
+            "content": [
+                {
+                    "componentName": "Arbor.panel.NewKpi",
+                    "xtype": "new-kpi-panel",
+                    "props": {
+                        "id": "kpi",
+                        "title": "Attendance",
+                        "url": "/guardians/student-ui/attendance-kpi/student-id/1879",
+                        "kpiCount": "4",
+                    },
+                }
+            ],
+            "xtype": "mis-layoutcolumn",
+            "props": {},
+        }
+    ],
+}

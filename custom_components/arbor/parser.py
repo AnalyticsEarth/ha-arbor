@@ -380,22 +380,73 @@ def find_metrics(tree: Any) -> list[Metric]:
     return metrics
 
 
+_LINK_KEYS = ("url", "href", "pageUrl", "link", "targetUrl", "contentRequestUrl")
+
+
+def _url_value(raw: Any) -> str | None:
+    """A URL that may be written plainly or wrapped in a field object.
+
+    Arbor's navigation trees carry ``{"url": {"value": "/guardians/..."}}``
+    rather than a bare string, so reading only strings skipped every per-student
+    navigation route.
+    """
+    if isinstance(raw, str):
+        return raw.strip() or None
+    if isinstance(raw, dict):
+        inner = raw.get("value")
+        if isinstance(inner, str):
+            return inner.strip() or None
+    return None
+
+
 def find_links(tree: Any) -> list[Link]:
     """Every link-like node, de-duplicated on (text, url)."""
     links: list[Link] = []
     seen: set[tuple[str, str]] = set()
     for node in walk(tree):
-        for key in ("url", "href", "pageUrl", "link", "targetUrl", "contentRequestUrl"):
-            raw = node.get(key)
-            if not isinstance(raw, str) or not raw.strip():
+        for key in _LINK_KEYS:
+            if key not in node:
+                continue
+            url = _url_value(node[key])
+            if url is None:
                 continue
             text = node_label(node) or ""
-            pair = (text, raw)
+            pair = (text, url)
             if pair in seen:
                 continue
             seen.add(pair)
-            links.append(Link(text=text, url=raw))
+            links.append(Link(text=text, url=url))
     return links
+
+
+# Props through which a component names the content it loads separately.
+_CONTENT_URL_KEYS = ("url", "pageUrl", "contentUrl", "dataUrl", "contentRequestUrl")
+
+
+def extract_content_urls(tree: Any) -> list[str]:
+    """Paths of components that fetch their own content.
+
+    Arbor's newer guardian pages return a layout only: a KPI panel or a
+    ``load-page`` button carries the path of the real content in its ``props``,
+    and the front end fetches that separately. Reading just the page therefore
+    finds no data at all, however well the parser understands it.
+    """
+    urls: list[str] = []
+    seen: set[str] = set()
+    for node in walk(tree):
+        props = node.get("props")
+        if not isinstance(props, dict):
+            continue
+        for key in _CONTENT_URL_KEYS:
+            url = _url_value(props.get(key))
+            # Only same-tenant paths; never an absolute or protocol-relative URL.
+            if url is None or not url.startswith("/") or url.startswith("//"):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+    return urls
 
 
 # ---------------------------------------------------------------------------

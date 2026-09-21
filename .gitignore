@@ -9,3 +9,4 @@ venv/
 
 # local tooling state
 .arbor-probe.json
+shapes.txt

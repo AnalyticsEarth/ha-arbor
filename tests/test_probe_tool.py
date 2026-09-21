@@ -61,19 +61,25 @@ class TestProbeToolIsPrivateByDefault(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.probe = _load_probe()
 
+    def test_depth_is_deep_enough_for_a_real_guardian_page(self) -> None:
+        # Arbor nests page > column > section > subsection > row > field, and a
+        # shallow dump truncates exactly where the values are.
+        args = self.probe.build_parser().parse_args(["shapes", "--email", "a@b.c"])
+        self.assertGreaterEqual(args.depth, 14)
+
     def test_show_values_defaults_to_off(self) -> None:
         args = self.probe.build_parser().parse_args(["report", "--email", "a@b.c"])
         self.assertFalse(args.show_values)
 
     def test_redaction_removes_content_by_default(self) -> None:
         payload = {"studentName": "Amelia Example", "count": 3}
-        redacted = self.probe.redact(payload, show_values=False)
+        redacted = self.probe.redact(payload, False)
         self.assertNotIn("Amelia Example", str(redacted))
         self.assertEqual(redacted["studentName"], "str[14]")
 
     def test_values_are_kept_when_asked(self) -> None:
         payload = {"studentName": "Amelia Example"}
-        self.assertEqual(self.probe.redact(payload, show_values=True), payload)
+        self.assertEqual(self.probe.redact(payload, True), payload)
 
     def test_names_are_masked_in_the_report(self) -> None:
         self.assertEqual(self.probe._mask_name("Amelia Example", False), "A… E…")
@@ -302,7 +308,11 @@ class TestRememberedSchool(unittest.TestCase):
         self.assertFalse(self.config.exists())
 
     def test_forget_school_needs_no_command_or_email(self) -> None:
-        self.assertEqual(self.probe.main(["--forget-school"]), 0)
+        import contextlib
+        import io
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.probe.main(["--forget-school"]), 0)
 
     def test_an_explicit_school_overrides_the_memory(self) -> None:
         self.probe.remember_school("a@b.c", "https://remembered.uk.arbor.education")

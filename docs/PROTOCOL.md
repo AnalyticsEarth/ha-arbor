@@ -176,6 +176,45 @@ every route above answers with the session cookie alone -- so this integration
 does not send it. If a data endpoint ever returns 401 while the session is
 demonstrably valid, that is the first thing to try.
 
+## 5b. Guardian pages return a layout, not data
+
+This is the single most important thing about Arbor's newer guardian routes, and
+the reason a scrape can fetch every page successfully and extract nothing.
+
+A page such as `/guardians/student-ui/assignments/student-id/<n>` answers with a
+component tree and **no data in it**:
+
+```
+type: "page"
+content: [ { xtype: "mis-layoutcolumn", content: [
+             { xtype: "new-kpi-panel",       props: { url: "/..." } } ] } ]
+subNav:  { props: { props: { treeData: { items: [ ... ] } } } }
+```
+
+The data is behind the `url` (or `pageUrl`, on a `mis-button-load-page` whose
+`role` is `load-page`) in a component's `props`. The front end fetches that
+separately, so anything reading only the page sees a layout. The scraper follows
+those paths, up to `MAX_CONTENT_DEPTH` levels and within a per-child request
+budget.
+
+Not every page works that way. The behaviour page carries its data inline as
+`mis-section` → `mis-subsection` → `mis-property-row` components, each row
+holding a `fieldLabel` and a `value` inside `props`. And the "Printable
+Timetable" page is a PDF download form (`role: form-download-pdf`), so it holds
+no timetable data at all -- a guardian timetable has to come from the calendar
+feeds instead.
+
+### Navigation fields are wrapped
+
+`subNav`'s tree carries each field as an object, not a string:
+
+```json
+{"fields": {"text": {"value": "Behaviour"},
+            "url":  {"value": "/guardians/behaviour-ui/student-behaviour/student-id/1879"}}}
+```
+
+Reading only string URLs therefore missed every per-student navigation route.
+
 ## 6. Why discovery rather than hard-coded URLs
 
 Guardian sub-pages (attendance, behaviour, assignments, and so on) are rendered

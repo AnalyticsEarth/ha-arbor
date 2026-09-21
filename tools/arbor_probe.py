@@ -106,6 +106,10 @@ ArborScraper = scraper.ArborScraper
 _LOGGER = logging.getLogger("arbor_probe")
 TIMEOUT = 45
 
+# Arbor nests a guardian page deeply -- page, column, section, subsection, row,
+# then the field object -- so a shallow dump truncates exactly where the data is.
+DEFAULT_SHAPE_DEPTH = 18
+
 
 class UrllibArborClient:
     """The integration's ArborClient, over urllib instead of aiohttp.
@@ -425,11 +429,11 @@ def _decode(response: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def redact(value: Any, show_values: bool) -> Any:
+def redact(value: Any, show_values: bool, depth: int = DEFAULT_SHAPE_DEPTH) -> Any:
     """Replace free text with a type-and-length placeholder."""
     if show_values:
         return value
-    return describe_shape(value)
+    return describe_shape(value, max_depth=depth)
 
 
 def _fmt(value: Any) -> str:
@@ -572,19 +576,19 @@ async def cmd_shapes(client: UrllibArborClient, args: argparse.Namespace) -> int
         print("=" * 72)
         for key in sorted(student.raw):
             print(f"\n----- {key}")
-            print(_fmt(redact(student.raw[key], args.show_values)))
+            print(_fmt(redact(student.raw[key], args.show_values, args.depth)))
     return 0
 
 
 async def cmd_shape(client: UrllibArborClient, args: argparse.Namespace) -> int:
     payload = await client.fetch_page(args.path)
-    print(_fmt(redact(payload, args.show_values)))
+    print(_fmt(redact(payload, args.show_values, args.depth)))
     return 0
 
 
 async def cmd_json(client: UrllibArborClient, args: argparse.Namespace) -> int:
     payload = await client.fetch_json(args.path)
-    print(_fmt(redact(payload, args.show_values)))
+    print(_fmt(redact(payload, args.show_values, args.depth)))
     return 0
 
 
@@ -610,7 +614,7 @@ async def cmd_whoami(client: UrllibArborClient, args: argparse.Namespace) -> int
         if args.show_values:
             print(_fmt(settings))
         else:
-            print(_fmt(redact(settings, False)))
+            print(_fmt(redact(settings, False, args.depth)))
     except ArborError as err:
         print(f"logged_in: could not tell ({err})")
 
@@ -718,6 +722,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print real values instead of redacted shapes. Your own screen only: "
         "the output will contain your child's personal data.",
+    )
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=DEFAULT_SHAPE_DEPTH,
+        help=f"how deep to describe a payload's structure (default {DEFAULT_SHAPE_DEPTH}). "
+        "Raise it if the output shows '<max depth>' where you need detail.",
     )
     parser.add_argument(
         "--forget-school",

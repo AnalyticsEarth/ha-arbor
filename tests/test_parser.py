@@ -222,6 +222,68 @@ class TestRecordListDialect(unittest.TestCase):
         self.assertEqual(len(parser.extract_assignments([pages.ASSIGNMENTS_PAGE])), 3)
 
 
+class TestShellPages(unittest.TestCase):
+    """Guardian pages that carry a layout and load their data separately.
+
+    Regression: every page fetched successfully and every extractor returned
+    zero, because the data was never in the page to begin with.
+    """
+
+    def test_finds_the_content_url_behind_a_load_page_button(self) -> None:
+        self.assertEqual(
+            parser.extract_content_urls(pages.SHELL_PAGE_WITH_CONTENT_URL),
+            ["/guardians/student-ui/assignments-content/student-id/1879"],
+        )
+
+    def test_finds_the_content_url_on_a_kpi_panel(self) -> None:
+        self.assertEqual(
+            parser.extract_content_urls(pages.KPI_SHELL_PAGE),
+            ["/guardians/student-ui/attendance-kpi/student-id/1879"],
+        )
+
+    def test_the_shell_itself_yields_no_assignments(self) -> None:
+        self.assertEqual(parser.extract_assignments([pages.SHELL_PAGE_WITH_CONTENT_URL]), [])
+
+    def test_the_content_yields_them(self) -> None:
+        items = parser.extract_assignments([pages.ASSIGNMENTS_CONTENT])
+        self.assertEqual(len(items), 2)
+        essay = next(item for item in items if "Macbeth" in item.title)
+        self.assertEqual(essay.subject, "English")
+        self.assertEqual(essay.grade, "B+")
+        self.assertTrue(essay.is_submitted)
+
+    def test_off_tenant_content_urls_are_ignored(self) -> None:
+        tree = {
+            "props": {"pageUrl": "https://evil.example/steal"},
+            "content": [{"props": {"url": "//evil.example/steal"}}],
+        }
+        self.assertEqual(parser.extract_content_urls(tree), [])
+
+
+class TestWrappedNavigationLinks(unittest.TestCase):
+    """Navigation fields arrive as {"value": ...}, not as bare strings."""
+
+    def test_wrapped_urls_are_read(self) -> None:
+        links = {link.text: link.url for link in parser.find_links(
+            pages.SHELL_PAGE_WITH_CONTENT_URL
+        )}
+        self.assertEqual(
+            links["Behaviour"],
+            "/guardians/behaviour-ui/student-behaviour/student-id/1879",
+        )
+        self.assertEqual(
+            links["Attendance"],
+            "/guardians/student-ui/recent-attendance/student-id/1879",
+        )
+
+    def test_those_navigation_routes_classify(self) -> None:
+        found = parser.classify_pages(
+            [pages.SHELL_PAGE_WITH_CONTENT_URL], const.DOMAIN_KEYWORDS
+        )
+        self.assertIn("Behaviour", found[const.DATA_BEHAVIOUR])
+        self.assertIn("Attendance", found[const.DATA_ATTENDANCE])
+
+
 class TestBehaviour(unittest.TestCase):
     """Behaviour points and incidents."""
 

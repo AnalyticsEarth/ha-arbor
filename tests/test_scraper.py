@@ -169,5 +169,80 @@ class TestSiblingsAreKeptApart(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calendar_requests, [])
 
 
+class TestFollowsShellPagesToTheirContent(unittest.IsolatedAsyncioTestCase):
+    """A guardian page that carries only a layout must still yield data.
+
+    This is Wrotham School's architecture, and the reason a scrape could fetch
+    six pages successfully and extract nothing at all from any of them.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.portal = FakePortal(
+            {
+                "/guardians/home-ui/dashboard": pages.SINGLE_CHILD_DASHBOARD,
+                "/guardians/student-profile/index/student-id/40219": pages.PROFILE_PAGE,
+                # The discovered assignments page is a shell...
+                "/guardians/assignments/index/student-id/40219": (
+                    pages.SHELL_PAGE_WITH_CONTENT_URL
+                ),
+                # ...whose content lives here.
+                "/guardians/student-ui/assignments-content/student-id/1879": (
+                    pages.ASSIGNMENTS_CONTENT
+                ),
+                "/auth/current-user-settings/format/json": pages.CURRENT_USER_SETTINGS,
+            }
+        )
+        self.scraper = scraper_module.ArborScraper(self.portal.fetch, self.portal.fetch)
+        self.data = await self.scraper.async_scrape()
+
+    def test_the_content_url_is_followed(self) -> None:
+        self.assertIn(
+            "/guardians/student-ui/assignments-content/student-id/1879",
+            self.portal.requested,
+        )
+
+    def test_the_data_behind_the_shell_is_extracted(self) -> None:
+        student = self.data.students["40219"]
+        self.assertEqual(len(student.assignments), 2)
+        self.assertEqual(
+            sorted(item.title for item in student.assignments),
+            ["Macbeth Act 2 essay", "Photosynthesis worksheet"],
+        )
+
+    def test_both_layers_are_kept_for_diagnostics(self) -> None:
+        keys = self.data.students["40219"].raw
+        self.assertTrue(any(key.endswith("> content 1") for key in keys), sorted(keys))
+
+    def test_a_request_budget_is_enforced(self) -> None:
+        self.assertLessEqual(
+            len(self.portal.requested), scraper_module.MAX_REQUESTS_PER_STUDENT + 8
+        )
+
+    def test_nothing_is_fetched_twice(self) -> None:
+        self.assertEqual(len(self.portal.requested), len(set(self.portal.requested)))
+
+
+class TestContentFollowingIsBounded(unittest.IsolatedAsyncioTestCase):
+    """A page that points at itself must not loop forever."""
+
+    async def test_a_self_referencing_page_terminates(self) -> None:
+        looping = {
+            "type": "page",
+            "content": [{"props": {"pageUrl": "/loop"}, "xtype": "mis-button-load-page"}],
+        }
+        portal = FakePortal(
+            {
+                "/guardians/home-ui/dashboard": pages.SINGLE_CHILD_DASHBOARD,
+                "/guardians/student-profile/index/student-id/40219": looping,
+                "/guardians/assignments/index/student-id/40219": looping,
+                "/loop": looping,
+            }
+        )
+        runner = scraper_module.ArborScraper(portal.fetch, portal.fetch)
+        data = await runner.async_scrape()
+        self.assertEqual(list(data.students), ["40219"])
+        self.assertEqual(portal.requested.count("/loop"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

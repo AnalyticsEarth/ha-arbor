@@ -260,6 +260,85 @@ class TestShellPages(unittest.TestCase):
         self.assertEqual(parser.extract_content_urls(tree), [])
 
 
+class TestKpiTiles(unittest.TestCase):
+    """KPI tiles report their number as `mainValue`."""
+
+    def test_tiles_become_metrics(self) -> None:
+        metrics = {m.label: m.value for m in parser.find_metrics(pages.KPI_TILE_CONTENT)}
+        self.assertEqual(metrics["Overdue Assignments"], "1")
+        self.assertEqual(metrics["Attendance this year"], "96.4%")
+
+    def test_attendance_is_read_from_a_tile(self) -> None:
+        summary = parser.extract_attendance([pages.KPI_TILE_CONTENT])
+        self.assertEqual(summary.percentage, 96.4)
+
+
+class TestBehaviourPropertyRows(unittest.TestCase):
+    """Incidents logged as a date label plus an HTML value."""
+
+    def setUp(self) -> None:
+        self.incidents = parser.extract_behaviour_rows([pages.BEHAVIOUR_PROPERTY_ROWS])
+
+    def test_both_rows_are_read(self) -> None:
+        self.assertEqual(len(self.incidents), 2)
+
+    def test_the_date_comes_from_the_label(self) -> None:
+        self.assertEqual(self.incidents[0].occurred, date(2026, 9, 21))
+
+    def test_the_html_is_stripped(self) -> None:
+        self.assertNotIn("<", self.incidents[0].comment or "")
+        self.assertIn("Excellent work", self.incidents[0].comment or "")
+
+    def test_points_and_sign_are_read(self) -> None:
+        positive = next(i for i in self.incidents if "Excellent" in (i.comment or ""))
+        negative = next(i for i in self.incidents if "Late" in (i.comment or ""))
+        self.assertEqual(positive.points, 2.0)
+        self.assertTrue(positive.is_positive)
+        self.assertEqual(negative.points, -1.0)
+        self.assertFalse(negative.is_positive)
+
+    def test_rows_without_a_date_label_are_ignored(self) -> None:
+        tree = {"props": {"fieldLabel": "Form group", "value": "9X1"}}
+        self.assertEqual(parser.extract_behaviour_rows([tree]), [])
+
+
+class TestCalendarReferences(unittest.TestCase):
+    """The calendar feed needs the object its component draws."""
+
+    def test_the_reference_is_read(self) -> None:
+        self.assertEqual(
+            parser.extract_calendar_references([pages.CALENDAR_COMPONENT_PAGE]),
+            [("1879", "43")],
+        )
+
+    def test_pages_without_a_calendar_yield_nothing(self) -> None:
+        self.assertEqual(
+            parser.extract_calendar_references([pages.PROFILE_PAGE]), []
+        )
+
+
+class TestFormPayloads(unittest.TestCase):
+    """An action URL answers with a form, which is not the child's data."""
+
+    def test_a_slideover_is_recognised(self) -> None:
+        self.assertTrue(parser.is_form_payload(pages.LOG_ABSENCE_SLIDEOVER))
+
+    def test_a_page_is_not(self) -> None:
+        self.assertFalse(parser.is_form_payload(pages.CALENDAR_COMPONENT_PAGE))
+        self.assertFalse(parser.is_form_payload(pages.ASSIGNMENTS_CONTENT))
+
+    def test_an_action_caption_is_not_followed(self) -> None:
+        self.assertEqual(
+            parser.extract_content_urls(pages.PAGE_WITH_ACTION_BUTTON_ONLY), []
+        )
+
+    def test_a_genuine_caption_still_is(self) -> None:
+        self.assertEqual(
+            parser.extract_content_urls(pages.SHELL_PAGE_WITH_CONTENT_URL),
+            ["/guardians/student-ui/assignments-content/student-id/1879"],
+        )
+
+
 class TestWrappedNavigationLinks(unittest.TestCase):
     """Navigation fields arrive as {"value": ...}, not as bare strings."""
 

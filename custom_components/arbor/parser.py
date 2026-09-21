@@ -47,7 +47,15 @@ _LABEL_KEYS = (
 )
 
 # Keys that hold a component's value.
-_VALUE_KEYS = ("value", "displayValue", "html", "content", "subtitle", "description")
+_VALUE_KEYS = (
+    "value",
+    "displayValue",
+    "mainValue",
+    "html",
+    "content",
+    "subtitle",
+    "description",
+)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
@@ -370,7 +378,15 @@ def find_metrics(tree: Any) -> list[Metric]:
                     break
         if not label:
             continue
-        for key in ("value", "displayValue", "text", "subtitle", "content", "html"):
+        for key in (
+            "value",
+            "displayValue",
+            "mainValue",
+            "text",
+            "subtitle",
+            "content",
+            "html",
+        ):
             if key not in node:
                 continue
             rendered = text_of(node[key])
@@ -419,6 +435,43 @@ def find_links(tree: Any) -> list[Link]:
     return links
 
 
+# Captions that introduce an action rather than a page of data. Matched as a
+# prefix, so "Report cards" is unaffected by "report ".
+_ACTION_CAPTION_PREFIXES = (
+    "log ",
+    "add ",
+    "new ",
+    "book ",
+    "pay ",
+    "top up",
+    "make ",
+    "request ",
+    "apply ",
+    "submit ",
+    "create ",
+    "edit ",
+    "change ",
+    "download ",
+    "print ",
+    "upload ",
+)
+
+#: Payload types that are a form or a modal rather than the child's data.
+FORM_PAYLOAD_TYPES = frozenset({"slideover", "window", "modal", "popup"})
+
+
+def is_form_payload(tree: Any) -> bool:
+    """Whether a payload is a form or modal rather than data.
+
+    Arbor answers an action URL with ``type: "slideover"`` -- the Log Absence
+    form, the change-password form -- which carries no information about the
+    child and should not be parsed as if it did.
+    """
+    return isinstance(tree, dict) and str(tree.get("type", "")).casefold() in (
+        FORM_PAYLOAD_TYPES
+    )
+
+
 # Props through which a component names the content it loads separately.
 _CONTENT_URL_KEYS = ("url", "pageUrl", "contentUrl", "dataUrl", "contentRequestUrl")
 
@@ -436,6 +489,13 @@ def extract_content_urls(tree: Any) -> list[str]:
     for node in walk(tree):
         props = node.get("props")
         if not isinstance(props, dict):
+            continue
+        # A component whose caption is an action -- "Log Absence", "Change
+        # password" -- targets a form, not the child's data. Skipping those by
+        # caption avoids the request; a form that slips through is discarded by
+        # its payload type instead, so neither check has to be perfect.
+        caption = (text_of(props.get("text")) or text_of(props.get("title")) or "").strip()
+        if caption.casefold().startswith(_ACTION_CAPTION_PREFIXES):
             continue
         for key in _CONTENT_URL_KEYS:
             url = _url_value(props.get(key))
@@ -963,6 +1023,79 @@ def extract_lessons_from_calendar(payload: Any) -> list[Lesson]:
     return sorted(unique.values(), key=lambda lesson: lesson.sort_key)
 
 
+def extract_calendar_references(trees: list[Any]) -> list[tuple[str, str]]:
+    """``(object_id, object_type_id)`` pairs from calendar components.
+
+    Arbor's calendar widget fetches its events per object, so calling the feed
+    without these returns an empty list -- which is why a timetable looked empty
+    while the page that draws it was perfectly happy.
+    """
+    refs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for tree in trees:
+        for node in walk(tree):
+            props = node.get("props")
+            if not isinstance(props, dict):
+                continue
+            object_id = props.get("referenceObjectId")
+            type_id = props.get("referenceObjectTypeId")
+            if object_id is None or type_id is None:
+                continue
+            pair = (str(object_id).strip(), str(type_id).strip())
+            if not (pair[0].isdigit() and pair[1].isdigit()) or pair in seen:
+                continue
+            seen.add(pair)
+            refs.append(pair)
+    return refs
+
+
+def extract_behaviour_rows(trees: list[Any]) -> list[BehaviourIncident]:
+    """Behaviour logged as property rows keyed by date.
+
+    Some guardian pages render each incident as a ``mis-property-row`` whose
+    ``fieldLabel`` is the date and whose ``value`` is an HTML description. That is
+    neither a table nor a labelled metric, so it needs reading on its own terms.
+    """
+    incidents: list[BehaviourIncident] = []
+    seen: set[tuple[str, str]] = set()
+
+    for tree in trees:
+        for node in walk(tree):
+            label = node.get("fieldLabel")
+            if label is None or "value" not in node:
+                continue
+            occurred = parse_date(text_of(label))
+            if occurred is None:
+                continue
+            detail = text_of(node.get("value"))
+            if not detail:
+                continue
+            key = (occurred.isoformat(), detail[:120])
+            if key in seen:
+                continue
+            seen.add(key)
+
+            points = parse_number(detail)
+            lowered = detail.casefold()
+            if points is not None and any(
+                word in lowered for word in _NEGATIVE_WORDS
+            ):
+                points = -abs(points)
+            incidents.append(
+                BehaviourIncident(
+                    occurred=occurred,
+                    kind=detail.split("  ")[0][:120] or None,
+                    points=points,
+                    comment=detail,
+                )
+            )
+
+    incidents.sort(
+        key=lambda item: (item.occurred is None, item.occurred or date.min), reverse=True
+    )
+    return incidents
+
+
 def extract_grades(trees: list[Any]) -> list[Grade]:
     """Reported marks per subject."""
     grades: list[Grade] = []
@@ -1338,24 +1471,6 @@ def extract_student_name(trees: list[Any]) -> str | None:
                 if candidate and _looks_like_name(candidate):
                     return candidate
     return None
-
-
-# Captions that introduce an action rather than a page of data. Matched as a
-# prefix, so "Report cards" is unaffected by "report ".
-_ACTION_CAPTION_PREFIXES = (
-    "log ",
-    "add ",
-    "new ",
-    "book ",
-    "pay ",
-    "top up",
-    "make ",
-    "request ",
-    "apply ",
-    "submit ",
-    "create ",
-    "edit ",
-)
 
 
 def classify_pages(

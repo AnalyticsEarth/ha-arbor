@@ -244,5 +244,84 @@ class TestContentFollowingIsBounded(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(portal.requested.count("/loop"), 1)
 
 
+class TestWrothamShapedPortal(unittest.IsolatedAsyncioTestCase):
+    """The architecture a real school actually serves.
+
+    Data pages are shells; a KPI panel carries the numbers; behaviour is
+    date-labelled property rows; the calendar needs its object reference; and an
+    action button answers with a form that must not be parsed.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.portal = FakePortal(
+            {
+                "/guardians/home-ui/dashboard": pages.WROTHAM_SHAPED_DASHBOARD,
+                "/guardians/student-profile/index/student-id/40219": pages.PROFILE_PAGE,
+                # Attendance: a shell whose only content URL is an action.
+                "/guardians/attendance/index/student-id/40219": (
+                    pages.PAGE_WITH_ACTION_BUTTON_ONLY
+                ),
+                "/guardians/attendance-ui/log-absence/student-id/1879": (
+                    pages.LOG_ABSENCE_SLIDEOVER
+                ),
+                # Assignments: a KPI shell whose content holds the tiles.
+                "/guardians/assignments/index/student-id/40219": pages.KPI_SHELL_PAGE,
+                "/guardians/student-ui/attendance-kpi/student-id/1879": (
+                    pages.KPI_TILE_CONTENT
+                ),
+                # Behaviour: property rows, inline.
+                "/guardians/behaviour/index/student-id/40219": (
+                    pages.BEHAVIOUR_PROPERTY_ROWS
+                ),
+                # Timetable: a calendar component naming its object.
+                "/guardians/calendar/index/student-id/40219": (
+                    pages.CALENDAR_COMPONENT_PAGE
+                ),
+                "/widget-data/get-calendar-data/format/json/object-id/1879"
+                "/object-type-id/43/": pages.CALENDAR_ENDPOINT,
+                "/auth/current-user-settings/format/json": pages.CURRENT_USER_SETTINGS,
+            }
+        )
+        self.scraper = scraper_module.ArborScraper(self.portal.fetch, self.portal.fetch)
+        self.data = await self.scraper.async_scrape()
+        self.student = self.data.students["40219"]
+
+    def test_the_action_form_is_not_parsed(self) -> None:
+        # It is requested once, then discarded because it is a slideover.
+        self.assertNotIn(
+            "/guardians/attendance-ui/log-absence/student-id/1879",
+            self.portal.requested,
+            "an action caption should not even be followed",
+        )
+
+    def test_attendance_comes_from_the_kpi_tile(self) -> None:
+        self.assertEqual(self.student.attendance.percentage, 96.4)
+
+    def test_behaviour_comes_from_the_property_rows(self) -> None:
+        self.assertEqual(len(self.student.behaviour_incidents), 2)
+        self.assertEqual(self.student.behaviour_points_positive, 2.0)
+        self.assertEqual(self.student.behaviour_points_negative, 1.0)
+        self.assertEqual(self.student.behaviour_points_net, 1.0)
+
+    def test_the_calendar_is_fetched_for_the_referenced_object(self) -> None:
+        self.assertIn(
+            "/widget-data/get-calendar-data/format/json/object-id/1879"
+            "/object-type-id/43/",
+            self.portal.requested,
+        )
+
+    def test_lessons_come_from_that_feed(self) -> None:
+        self.assertEqual(len(self.student.lessons), 3)
+        self.assertEqual(self.student.lessons[0].summary, "Biology")
+
+    def test_an_object_scoped_calendar_avoids_the_generic_feeds(self) -> None:
+        generic = [
+            path
+            for path in self.portal.requested
+            if path.startswith("/widget-data/get-calendar-data/format/json/start-date")
+        ]
+        self.assertEqual(generic, [])
+
+
 if __name__ == "__main__":
     unittest.main()

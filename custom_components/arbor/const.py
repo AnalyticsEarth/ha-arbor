@@ -33,6 +33,12 @@ CURRENT_USER_SETTINGS_PATH = "/auth/current-user-settings/format/json"
 MAIN_MENU_PATH = "/navigation/main-menu/format/json"
 NOTICES_PATH = "/widget-data/get-notices/format/json"
 CALENDAR_DATA_PATH = "/widget-data/get-calendar-data/format/json/"
+# How Arbor's own calendar widget asks for a particular object's events. Taken
+# from the front-end bundle:
+#   GET_CALENDAR_DATA + "object-id/" + id + "/object-type-id/" + typeId + "/"
+CALENDAR_DATA_OBJECT_PATH = (
+    CALENDAR_DATA_PATH + "object-id/{object_id}/object-type-id/{object_type_id}/"
+)
 CALENDAR_ENTRY_LIST_PATH = "/calendar-entry/list-static/format/json/"
 NOTIFICATIONS_PATH = "/user-notification/get-notifications/format/json/"
 
@@ -78,7 +84,18 @@ DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
     DATA_ASSIGNMENTS: ("assignment", "homework", "coursework", "gwaith cartref"),
     DATA_TIMETABLE: ("timetable", "calendar", "schedule", "amserlen"),
     DATA_PROGRESS: ("progress", "attainment", "grade", "assessment", "cynnydd"),
-    DATA_MEALS: ("meal", "lunch", "dinner", "catering", "account", "balance"),
+    # Not a bare "account": "My Account" is the guardian's own settings page,
+    # which is a change-password form rather than a meal balance.
+    DATA_MEALS: (
+        "meal",
+        "lunch",
+        "dinner",
+        "catering",
+        "balance",
+        "top up",
+        "topup",
+        "dinner money",
+    ),
     DATA_NOTICES: ("notice", "news", "bulletin", "message"),
     DATA_PAYMENTS: ("payment", "invoice", "shop", "trip", "club", "fee"),
     DATA_EXAMINATIONS: ("examination", "exam"),

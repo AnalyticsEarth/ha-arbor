@@ -23,6 +23,7 @@ from .errors import (
 )
 from .const import (
     ALL_DATA_DOMAINS,
+    CALENDAR_DATA_OBJECT_PATH,
     CALENDAR_DATA_PATH,
     CALENDAR_ENTRY_LIST_PATH,
     CURRENT_USER_SETTINGS_PATH,
@@ -44,11 +45,14 @@ from .models import ArborData, StudentData
 from .parser import (
     classify_pages,
     extract_content_urls,
+    is_form_payload,
     filter_pages_for_student,
     extract_accounts,
     extract_assignments,
     extract_attendance,
     extract_behaviour,
+    extract_behaviour_rows,
+    extract_calendar_references,
     extract_grades,
     extract_lessons_from_calendar,
     extract_lessons_from_tables,
@@ -321,20 +325,61 @@ class ArborScraper:
         timetable_pages = [
             tree for key, tree in student.raw.items() if key.startswith(f"{DATA_TIMETABLE}:")
         ]
-        calendar_trees = (
-            await self._calendar_trees(student) if allow_shared_sources else []
-        )
+
+        # A calendar component names the object whose events it draws, so this
+        # feed is scoped to the child and safe even when they have siblings.
+        calendar_trees = await self._calendar_object_trees(student)
+        if not calendar_trees and allow_shared_sources:
+            calendar_trees = await self._calendar_trees(student)
         trees[DATA_TIMETABLE].extend(calendar_trees)
 
-        student.attendance = extract_attendance(trees[DATA_ATTENDANCE])
+        # A KPI panel mixes domains -- an assignments page's tiles can carry the
+        # attendance percentage -- so the metric-driven extractors read every
+        # tree fetched for this child. Their own keyword matching is the filter.
+        # Table-driven extraction stays bucketed, where a stray "Subject" or
+        # "Mark" column would otherwise be read as the wrong domain.
+        child_trees = [*trees[DATA_ATTENDANCE], *student.raw.values()]
+
+        student.attendance = extract_attendance(child_trees)
         (
             student.behaviour_points_positive,
             student.behaviour_points_negative,
             student.behaviour_incidents,
         ) = extract_behaviour(trees[DATA_BEHAVIOUR])
+        if student.behaviour_points_net is None:
+            wider_positive, wider_negative, _ = extract_behaviour(child_trees)
+            student.behaviour_points_positive = (
+                student.behaviour_points_positive
+                if student.behaviour_points_positive is not None
+                else wider_positive
+            )
+            student.behaviour_points_negative = (
+                student.behaviour_points_negative
+                if student.behaviour_points_negative is not None
+                else wider_negative
+            )
+        if not student.behaviour_incidents:
+            # Some pages log each incident as a date-labelled property row.
+            student.behaviour_incidents = extract_behaviour_rows(trees[DATA_BEHAVIOUR])
+            if student.behaviour_incidents and student.behaviour_points_net is None:
+                student.behaviour_points_positive = float(
+                    sum(
+                        abs(item.points or 1)
+                        for item in student.behaviour_incidents
+                        if item.is_positive
+                    )
+                )
+                student.behaviour_points_negative = float(
+                    sum(
+                        abs(item.points or 1)
+                        for item in student.behaviour_incidents
+                        if not item.is_positive
+                    )
+                )
+
         student.assignments = extract_assignments(trees[DATA_ASSIGNMENTS])
         student.grades = extract_grades(trees[DATA_PROGRESS])
-        student.accounts = extract_accounts(trees[DATA_MEALS])
+        student.accounts = extract_accounts([*trees[DATA_MEALS], *student.raw.values()])
         student.notices = extract_notices(trees[DATA_NOTICES])
 
         # A page fetched for this child beats any guardian-wide feed.
@@ -402,6 +447,20 @@ class ArborScraper:
         self._calendar_templates_cache = working
         return trees
 
+    async def _calendar_object_trees(self, student: StudentData) -> list[Any]:
+        """Calendar events for the objects this child's pages reference."""
+        references = extract_calendar_references(list(student.raw.values()))
+        trees: list[Any] = []
+        for object_id, type_id in references[:2]:
+            path = CALENDAR_DATA_OBJECT_PATH.format(
+                object_id=object_id, object_type_id=type_id
+            )
+            tree = await self._try_json(path)
+            if tree is not None:
+                trees.append(tree)
+                student.raw[f"calendar:{path}"] = tree
+        return trees
+
     def _calendar_templates(self) -> list[tuple[str, tuple[str, ...]]]:
         """Endpoint bases paired with the path suffixes worth trying."""
         if self._calendar_templates_cache:
@@ -432,6 +491,11 @@ class ArborScraper:
 
         tree = await self._try_page(path)
         if tree is None:
+            return []
+        if is_form_payload(tree):
+            # A form or modal: no data about the child, and nothing worth
+            # following further.
+            self._log.debug("Ignoring form payload at %s", path)
             return []
         trees = [tree]
         if depth >= MAX_CONTENT_DEPTH:

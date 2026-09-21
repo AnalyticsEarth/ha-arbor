@@ -204,6 +204,49 @@ Timetable" page is a PDF download form (`role: form-download-pdf`), so it holds
 no timetable data at all -- a guardian timetable has to come from the calendar
 feeds instead.
 
+### What each guardian page actually holds
+
+Observed at one secondary school, and the shapes the parser is written against:
+
+| Page | Holds |
+| --- | --- |
+| Assignments | a `new-kpi-panel` whose content is a list of tiles: `{title, description, mainValue, url}`. The number is **`mainValue`**, and each tile's `url` is the detail page |
+| Attendance | only a `mis-button-load-page` for "Log Absence". The percentage arrives as a KPI tile, not from this page |
+| Behaviour | `mis-property-row` components inline, each `props.fieldLabel` a **date** and `props.value` an **HTML** description of the incident |
+| Calendar | a `mis-calendar-calendar` with `referenceObjectId` and `referenceObjectTypeId` |
+| Printable Timetable | a PDF download form; no timetable data |
+| My Account | the guardian's own change-password form, not a meal balance |
+
+Two consequences worth stating:
+
+- A KPI panel mixes domains, so an assignments page's tiles can carry the
+  attendance percentage. Metric-driven extraction therefore reads every tree
+  fetched for a child rather than only the page filed under that domain.
+- An action URL answers with `type: "slideover"` -- the Log Absence form, the
+  change-password form. Those carry nothing about the child, so a caption
+  beginning "Log ", "Change ", "Pay " and so on is not followed, and any payload
+  that comes back as a slideover is discarded.
+
+### The calendar feed needs its object
+
+Calling `/widget-data/get-calendar-data/format/json/` bare returns
+`{"items": [], "success": true}` -- not an error, just nothing. The widget asks
+per object, and the bundle shows exactly how:
+
+```js
+e = t.url ? t.url
+          : WIDGET_DATA.GET_CALENDAR_DATA + "object-id/" + n + "/object-type-id/" + a + "/"
+```
+
+So with the calendar component's props:
+
+```
+/widget-data/get-calendar-data/format/json/object-id/<referenceObjectId>/object-type-id/<referenceObjectTypeId>/
+```
+
+That path is scoped to the object the child's own page named, so it is safe to
+use even for a guardian with siblings -- unlike the bare feed.
+
 ### Navigation fields are wrapped
 
 `subNav`'s tree carries each field as an object, not a string:

@@ -565,3 +565,161 @@ KPI_SHELL_PAGE = {
         }
     ],
 }
+
+
+# KPI tiles: the number is `mainValue`, not `value`.
+KPI_TILE_CONTENT = [
+    {
+        "title": "Assignments that are due",
+        "description": "This week",
+        "mainValue": "3",
+        "mainValueColor": "blue",
+        "url": "/guardians/student-ui/assignments-due/student-id/1879",
+    },
+    {
+        "title": "Overdue Assignments",
+        "description": "Not handed in",
+        "mainValue": "1",
+        "url": "/guardians/student-ui/assignments-overdue/student-id/1879",
+    },
+    {
+        "title": "Attendance this year",
+        "description": "Since September",
+        "mainValue": "96.4%",
+        "url": "/guardians/student-ui/attendance/student-id/1879",
+    },
+]
+
+# Behaviour logged as date-labelled property rows holding HTML, which is neither
+# a table nor a conventional label/value metric.
+BEHAVIOUR_PROPERTY_ROWS = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "mis-section",
+            "props": {"title": "Behaviour this year"},
+            "content": [
+                {
+                    "xtype": "mis-subsection",
+                    "props": {"title": "Positive"},
+                    "content": [
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "fieldLabel": "21 Sep 2026",
+                                "value": "<b>Excellent work</b>&nbsp;2 points&nbsp;Biology",
+                            },
+                        },
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "fieldLabel": "18 Sep 2026",
+                                "value": "<b>Late to lesson</b>&nbsp;1 point&nbsp;Negative",
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    ],
+}
+
+# A calendar component names the object whose events it draws.
+CALENDAR_COMPONENT_PAGE = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "mis-layoutcolumn",
+            "content": [
+                {
+                    "xtype": "mis-calendar-calendar",
+                    "props": {
+                        "itemId": "student-calendar",
+                        "defaultView": "timeGrid",
+                        "referenceObjectTypeId": 43,
+                        "referenceObjectId": 1879,
+                    },
+                }
+            ],
+        }
+    ],
+}
+
+# What an action URL answers with: a form, carrying nothing about the child.
+LOG_ABSENCE_SLIDEOVER = {
+    "type": "slideover",
+    "content": [
+        {
+            "xtype": "mis-section",
+            "content": [
+                {
+                    "xtype": "mis-combobox",
+                    "props": {"name": "from_time", "fieldLabel": "Absent from"},
+                }
+            ],
+        }
+    ],
+}
+
+# A page whose only content URL is an action button.
+PAGE_WITH_ACTION_BUTTON_ONLY = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "container",
+            "content": [
+                {
+                    "xtype": "mis-button-load-page",
+                    "props": {
+                        "text": "Log Absence",
+                        "role": "load-page",
+                        "pageUrl": "/guardians/attendance-ui/log-absence/student-id/1879",
+                    },
+                }
+            ],
+        }
+    ],
+}
+
+
+# A dashboard whose per-student navigation covers the routes a real guardian
+# portal offers, including the calendar page.
+WROTHAM_SHAPED_DASHBOARD = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "container",
+            "content": [
+                {
+                    "text": "Amelia Example",
+                    "url": "/guardians/student-profile/index/student-id/40219",
+                }
+            ],
+        }
+    ],
+    "subNav": {
+        "props": {
+            "props": {
+                "treeData": {
+                    "items": [
+                        {
+                            "fields": {
+                                "text": {"value": caption},
+                                "url": {"value": url},
+                            },
+                            "leaf": True,
+                        }
+                        for caption, url in (
+                            ("Attendance", "/guardians/attendance/index/student-id/40219"),
+                            ("Behaviour", "/guardians/behaviour/index/student-id/40219"),
+                            ("Assignments", "/guardians/assignments/index/student-id/40219"),
+                            ("Calendar", "/guardians/calendar/index/student-id/40219"),
+                            ("Log Absence", "/guardians/absence/new/student-id/40219"),
+                        )
+                    ]
+                }
+            },
+            "xtype": "mis-subnavcolumn",
+        }
+    },
+}

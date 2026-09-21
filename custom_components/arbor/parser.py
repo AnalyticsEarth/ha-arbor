@@ -969,13 +969,29 @@ def extract_lessons_from_calendar(payload: Any) -> list[Lesson]:
             continue
 
         start = None
-        for key in ("start", "startDate", "startDatetime", "start_date", "from", "startTime"):
+        for key in (
+            "start_datetime",
+            "startDatetime",
+            "start",
+            "startDate",
+            "start_date",
+            "from",
+            "startTime",
+        ):
             if key in node:
                 start = parse_datetime(node[key])
                 if start:
                     break
         end = None
-        for key in ("end", "endDate", "endDatetime", "end_date", "to", "endTime"):
+        for key in (
+            "end_datetime",
+            "endDatetime",
+            "end",
+            "endDate",
+            "end_date",
+            "to",
+            "endTime",
+        ):
             if key in node:
                 end = parse_datetime(node[key])
                 if end:
@@ -1049,6 +1065,70 @@ def extract_calendar_references(trees: list[Any]) -> list[tuple[str, str]]:
     return refs
 
 
+@dataclass(slots=True)
+class Kpi:
+    """A titled headline figure, with the text it was read from."""
+
+    title: str
+    text: str
+
+
+def extract_kpis(trees: list[Any]) -> list[Kpi]:
+    """Arbor's per-child KPI list.
+
+    Each entry is ``fields.title.value`` plus ``fields.html.value``: a caption
+    such as "Attendance (2026/2027)" and a rendered fragment holding the number.
+    """
+    kpis: list[Kpi] = []
+    seen: set[str] = set()
+    for tree in trees:
+        for node in walk(tree):
+            fields = node.get("fields")
+            if not isinstance(fields, dict):
+                continue
+            title = text_of(fields.get("title"))
+            html = text_of(fields.get("html"))
+            if not title or not html or title in seen:
+                continue
+            seen.add(title)
+            kpis.append(Kpi(title=title, text=html))
+    return kpis
+
+
+def attendance_from_kpis(kpis: list[Kpi]) -> float | None:
+    """The attendance percentage from a KPI captioned for attendance."""
+    for kpi in kpis:
+        if "attendance" not in kpi.title.casefold():
+            continue
+        if (percentage := parse_percentage(kpi.text)) is not None:
+            return percentage
+    return None
+
+
+def behaviour_from_kpis(kpis: list[Kpi]) -> tuple[float | None, float | None]:
+    """Positive and negative behaviour totals from the KPI captions.
+
+    Arbor publishes these as *incident counts* at some schools, so the figures
+    are whatever the school's own headline is rather than a points calculation.
+    """
+    positive = negative = None
+    for kpi in kpis:
+        title = kpi.title.casefold()
+        if "behaviour" not in title and "behavior" not in title:
+            continue
+        value = parse_number(kpi.text)
+        if value is None:
+            continue
+        if positive is None and "positive" in title:
+            positive = abs(value)
+        elif negative is None and "negative" in title:
+            negative = abs(value)
+    return positive, negative
+
+
+_POINTS_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*point", re.IGNORECASE)
+
+
 def extract_behaviour_rows(trees: list[Any]) -> list[BehaviourIncident]:
     """Behaviour logged as property rows keyed by date.
 
@@ -1075,7 +1155,11 @@ def extract_behaviour_rows(trees: list[Any]) -> list[BehaviourIncident]:
                 continue
             seen.add(key)
 
-            points = parse_number(detail)
+            # Only a number the text actually calls a point. Taking the first
+            # number in the fragment produced totals of 203 against 31
+            # incidents, which was meaningless.
+            match = _POINTS_RE.search(detail)
+            points = float(match.group(1)) if match else None
             lowered = detail.casefold()
             if points is not None and any(
                 word in lowered for word in _NEGATIVE_WORDS
@@ -1094,6 +1178,114 @@ def extract_behaviour_rows(trees: list[Any]) -> list[BehaviourIncident]:
         key=lambda item: (item.occurred is None, item.occurred or date.min), reverse=True
     )
     return incidents
+
+
+@dataclass(slots=True)
+class SectionRow:
+    """A dashboard row, with the section heading it sits under."""
+
+    section: str
+    text: str
+    description: str | None = None
+    url: str | None = None
+
+
+def _iter_section_rows(node: Any, section: str = "") -> Iterator[SectionRow]:
+    """Walk a tree yielding property rows tagged with their nearest section."""
+    if isinstance(node, dict):
+        xtype = node.get("xtype")
+        props = node.get("props") if isinstance(node.get("props"), dict) else {}
+        if isinstance(xtype, str) and "section" in xtype.casefold():
+            section = text_of(props.get("title")) or section
+        if xtype == "mis-property-row":
+            url = props.get("url")
+            yield SectionRow(
+                section=section.strip(),
+                text=text_of(props.get("value")) or "",
+                description=text_of(props.get("description")),
+                url=url if isinstance(url, str) else None,
+            )
+            return
+        for value in node.values():
+            yield from _iter_section_rows(value, section)
+    elif isinstance(node, (list, tuple)):
+        for item in node:
+            yield from _iter_section_rows(item, section)
+
+
+def extract_section_rows(trees: list[Any]) -> list[SectionRow]:
+    """Every dashboard property row, with its section heading."""
+    rows: list[SectionRow] = []
+    seen: set[tuple[str, str]] = set()
+    for tree in trees:
+        for row in _iter_section_rows(tree):
+            if not row.text:
+                continue
+            key = (row.section, row.text)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+    return rows
+
+
+# "9En4: Term 1 - Task 1 (Due 24 Sep 2026)" -- class code, title, due date.
+_DUE_ROW_RE = re.compile(
+    r"^(?:(?P<subject>[^:]{1,40}):\s*)?(?P<title>.+?)\s*\(\s*due\s+(?P<due>[^)]+)\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def extract_assignments_from_sections(rows: list[SectionRow]) -> list[Assignment]:
+    """Assignments listed as dashboard rows.
+
+    The guardian dashboard is where Arbor actually lists work that is due; the
+    assignments *page* is a layout with counts on it. Each row reads
+    "<class>: <title> (Due <date>)", with the submission status alongside.
+    """
+    assignments: list[Assignment] = []
+    seen: set[str] = set()
+    for row in rows:
+        if "assignment" not in row.section.casefold():
+            continue
+        match = _DUE_ROW_RE.match(row.text)
+        if match is None:
+            continue
+        title = match.group("title").strip()
+        if not title or title.casefold() in seen:
+            continue
+        seen.add(title.casefold())
+        assignments.append(
+            Assignment(
+                title=title,
+                subject=(match.group("subject") or "").strip() or None,
+                due=parse_datetime(match.group("due")),
+                status=row.description,
+                url=row.url,
+            )
+        )
+    assignments.sort(key=lambda item: (item.due is None, item.due or datetime.max))
+    return assignments
+
+
+def extract_accounts_from_sections(rows: list[SectionRow]) -> list[AccountBalance]:
+    """Balances shown as a dashboard row, e.g. description "Balance: £4.15"."""
+    accounts: list[AccountBalance] = []
+    seen: set[str] = set()
+    for row in rows:
+        source = row.description or ""
+        if "balance" not in source.casefold():
+            continue
+        balance = parse_currency(source)
+        if balance is None:
+            continue
+        # "Alexander Pressland: Meals" -- the account name is after the colon.
+        name = row.text.split(":")[-1].strip() or row.section or "Account"
+        if name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        accounts.append(AccountBalance(name=name, balance=balance))
+    return accounts
 
 
 def extract_grades(trees: list[Any]) -> list[Grade]:
@@ -1222,7 +1414,9 @@ def extract_notices(trees: list[Any]) -> list[Notice]:
 # payments -- so matching that turned any dashboard link into a "child".
 _STUDENT_ID_PATTERNS = (
     re.compile(r"/student[-_]?id/(\d+)", re.IGNORECASE),
-    re.compile(r"/students?[-_]?profile/(?:[^/?]+/)*?id/(\d+)", re.IGNORECASE),
+    # /guardians/student-ui/overview/id/1879 -- which carries the child's name as
+    # its caption, and was the reason a child could be found but not named.
+    re.compile(r"/student(?:s|-ui|_ui)?/(?:[^/?]+/)*?id/(\d+)", re.IGNORECASE),
     re.compile(r"/students?/(?:view/)?(\d+)(?=/|$|\?)", re.IGNORECASE),
 )
 

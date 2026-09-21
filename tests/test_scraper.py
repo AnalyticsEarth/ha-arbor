@@ -14,6 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from datetime import datetime  # noqa: E402
+
 from _loader import errors, load  # noqa: E402
 from fixtures import pages  # noqa: E402
 
@@ -164,9 +166,10 @@ class TestSiblingsAreKeptApart(unittest.IsolatedAsyncioTestCase):
         sibling_paths = [
             path for path in self.portal.requested if "student-id/40855" in path
         ]
-        self.assertEqual(
-            sibling_paths, ["/guardians/student-profile/index/student-id/40855"]
-        )
+        # Its own profile, plus the per-child endpoints, which are scoped by id.
+        self.assertIn("/guardians/student-profile/index/student-id/40855", sibling_paths)
+        for path in sibling_paths:
+            self.assertNotIn("40219", path)
 
     def test_no_page_is_fetched_twice(self) -> None:
         # A first-child page fetched again would mean it was read for both.
@@ -174,14 +177,15 @@ class TestSiblingsAreKeptApart(unittest.IsolatedAsyncioTestCase):
             len(self.portal.requested), len(set(self.portal.requested))
         )
 
-    def test_shared_calendar_feeds_are_not_used_with_siblings(self) -> None:
-        # School-wide notices are fine; a calendar with no student id is not.
-        calendar_requests = [
+    def test_no_calendar_without_a_student_id_is_used_with_siblings(self) -> None:
+        # A per-child feed is fine; one with no student id would be ambiguous.
+        ambiguous = [
             path
             for path in self.portal.requested
-            if "calendar-data" in path or path.startswith("/calendar-entry/")
+            if ("calendar-data" in path or path.startswith("/calendar-entry/"))
+            and "student-id/" not in path
         ]
-        self.assertEqual(calendar_requests, [])
+        self.assertEqual(ambiguous, [])
 
 
 class TestFollowsShellPagesToTheirContent(unittest.IsolatedAsyncioTestCase):
@@ -339,12 +343,14 @@ class TestWrothamShapedPortal(unittest.IsolatedAsyncioTestCase):
                     pages.CALENDAR_COMPONENT_PAGE
                 ),
                 "/auth/current-user-settings/format/json": pages.CURRENT_USER_SETTINGS,
-            },
-            posts={"/calendar-entry/list-static/format/json/": pages.CALENDAR_POST_RESPONSE},
+                # The two per-child endpoints the dashboard links to.
+                "/guardians/student/kpis/id/40219/": pages.STUDENT_KPIS,
+                "/guardians/widget-data/get-calendar-data/student-id/40219/": (
+                    pages.GUARDIAN_CALENDAR
+                ),
+            }
         )
-        self.scraper = scraper_module.ArborScraper(
-            self.portal.fetch, self.portal.fetch, self.portal.post
-        )
+        self.scraper = scraper_module.ArborScraper(self.portal.fetch, self.portal.fetch)
         self.data = await self.scraper.async_scrape()
         self.student = self.data.students["40219"]
 
@@ -356,45 +362,46 @@ class TestWrothamShapedPortal(unittest.IsolatedAsyncioTestCase):
             "an action caption should not even be followed",
         )
 
-    def test_attendance_comes_from_the_kpi_tile(self) -> None:
-        self.assertEqual(self.student.attendance.percentage, 96.4)
+    def test_attendance_comes_from_the_kpi_endpoint(self) -> None:
+        """The attendance percentage is published only as a KPI.
 
-    def test_behaviour_comes_from_the_property_rows(self) -> None:
+        The attendance *page* holds nothing but a Log Absence button, which is
+        why this looked unavailable for several rounds.
+        """
+        self.assertEqual(self.student.attendance.percentage, 100.0)
+        self.assertIn("attendance", self.student.sourced_domains)
+
+    def test_behaviour_totals_come_from_the_kpi_endpoint(self) -> None:
+        # The school's own headline figures, which it publishes as counts.
+        self.assertEqual(self.student.behaviour_points_positive, 35.0)
+        self.assertEqual(self.student.behaviour_points_negative, 0.0)
+
+    def test_incidents_still_come_from_the_property_rows(self) -> None:
         self.assertEqual(len(self.student.behaviour_incidents), 2)
-        self.assertEqual(self.student.behaviour_points_positive, 2.0)
-        self.assertEqual(self.student.behaviour_points_negative, 1.0)
-        self.assertEqual(self.student.behaviour_points_net, 1.0)
 
-    def test_the_calendar_is_posted_with_an_object_filter(self) -> None:
-        import json
+    def test_no_points_are_invented_from_an_incident_fragment(self) -> None:
+        """Only a number the text calls a point counts as one.
 
-        self.assertEqual(len(self.portal.posted), 1)
-        path, body = self.portal.posted[0]
-        self.assertEqual(path, "/calendar-entry/list-static/format/json/")
-        params = json.loads(body)["action_params"]
-        self.assertEqual(
-            params["filters"],
-            [
-                {
-                    "field_name": "object",
-                    "value": {"_objectTypeId": 43, "_objectId": 1879},
-                }
-            ],
-        )
-        self.assertIn("startDate", params)
-        self.assertIn("endDate", params)
+        Taking the first number in each fragment produced a total of 203 points
+        across 31 incidents, which meant nothing.
+        """
+        first = self.student.behaviour_incidents[0]
+        self.assertEqual(first.points, 2.0)  # its text says "2 points"
 
-    def test_lessons_come_from_that_response(self) -> None:
-        self.assertEqual(len(self.student.lessons), 3)
+    def test_lessons_come_from_the_per_child_calendar_feed(self) -> None:
+        self.assertEqual(len(self.student.lessons), 2)
         self.assertEqual(self.student.lessons[0].summary, "Biology")
+        self.assertEqual(self.student.lessons[0].start, datetime(2026, 9, 22, 9, 0))
+        self.assertEqual(self.student.lessons[0].location, "S4")
 
-    def test_the_generic_feeds_are_not_used_once_the_post_works(self) -> None:
-        generic = [
+    def test_the_ambiguous_feeds_are_not_used_once_that_works(self) -> None:
+        ambiguous = [
             path
             for path in self.portal.requested
-            if "get-calendar-data" in path or path.startswith("/calendar-entry/")
+            if ("get-calendar-data" in path and "student-id/" not in path)
+            or path.startswith("/calendar-entry/")
         ]
-        self.assertEqual(generic, [])
+        self.assertEqual(ambiguous, [])
 
 
 if __name__ == "__main__":

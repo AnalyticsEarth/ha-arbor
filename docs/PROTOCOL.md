@@ -244,6 +244,32 @@ Two consequences worth stating:
   beginning "Log ", "Change ", "Pay " and so on is not followed, and any payload
   that comes back as a slideover is discarded.
 
+### Where a guardian's data actually lives
+
+Confirmed against a live account. The short version: **almost none of it is on
+the page named after it.** The dashboard's own links are the map.
+
+| Data | Source |
+| --- | --- |
+| Attendance % | `/guardians/student/kpis/id/<id>/` — captioned "Attendance (2026/2027)", the number inside rendered HTML |
+| Behaviour totals | the same KPI list — "Positive/Negative/Neutral Behavioural Incidents - this term". Published as **incident counts**, not points |
+| Behaviour incidents | the behaviour page, as date-labelled property rows |
+| Assignments due | the **dashboard**, section "Assignments that are due": rows reading `9En4: Term 1 - Task 1 (Due 24 Sep 2026)` with the status alongside |
+| Meal balance | the **dashboard**, section "Accounts": row description `Balance: £4.15` |
+| Timetable | `/guardians/widget-data/get-calendar-data/student-id/<id>/` — events with `start_datetime`, `end_datetime`, `title`, `location` |
+| The child's name | the caption of `/guardians/student-ui/overview/id/<id>` |
+
+Two traps in that list:
+
+- Both per-child endpoints must be fetched as **plain JSON**. Requesting either
+  as a page, with `format=javascript`, returns a **500**.
+- The attendance *page* holds nothing but a "Log Absence" button, and the
+  assignments *page* holds only counts. Looking for the data where its name
+  suggests it should be wastes a lot of time.
+
+The calendar feed returns **today only**. A date range presumably narrows it, but
+that has not been established, so the timetable covers the current day.
+
 ### The calendar is a POST, and not to the widget endpoint
 
 Two different things serve calendar data, and only one of them serves a

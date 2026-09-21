@@ -39,6 +39,13 @@ CALENDAR_DATA_PATH = "/widget-data/get-calendar-data/format/json/"
 CALENDAR_ENTRY_LIST_PATH = "/calendar-entry/list-static/format/json/"
 NOTIFICATIONS_PATH = "/user-notification/get-notifications/format/json/"
 
+# Per-child endpoints, reached from the dashboard's own links. Both answer as
+# plain JSON; asking for either as a page (with format=javascript) returns a 500.
+STUDENT_KPIS_PATH = "/guardians/student/kpis/id/{student_id}/"
+GUARDIAN_CALENDAR_PATH = (
+    "/guardians/widget-data/get-calendar-data/student-id/{student_id}/"
+)
+
 GUARDIAN_DASHBOARD_PAGE = "/guardians/home-ui/dashboard"
 STUDENT_DASHBOARD_PAGE = "/students/home-ui/dashboard"
 STAFF_HOME_PAGE = "/home-ui/index"

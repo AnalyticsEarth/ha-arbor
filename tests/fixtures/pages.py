@@ -746,3 +746,143 @@ CALENDAR_POST_RESPONSE = {
         }
     ],
 }
+
+
+# /guardians/student/kpis/id/<id>/ -- the school's headline figures. Each entry
+# is a caption plus a rendered fragment holding the number. Captions and values
+# copied in shape from a live account.
+STUDENT_KPIS = {
+    "success": True,
+    "items": [
+        {
+            "fields": {
+                "title": {"value": "Attendance (2026/2027)"},
+                "html": {
+                    "value": "<div class='kpi'><span>100%</span>"
+                    "<small>100% of 4 sessions</small></div>"
+                },
+                "url": {"value": "/guardians/student-ui/recent-attendance/student-id/1879"},
+            }
+        },
+        {
+            "fields": {
+                "title": {"value": "Positive Behavioural Incidents - this term"},
+                "html": {"value": "<div class='kpi'><span>35</span></div>"},
+            }
+        },
+        {
+            "fields": {
+                "title": {"value": "Negative Behavioural Incidents - this term"},
+                "html": {"value": "<div class='kpi'><span>0</span></div>"},
+            }
+        },
+        {
+            "fields": {
+                "title": {"value": "Neutral Behavioural Incidents - this term"},
+                "html": {"value": "<div class='kpi'><span>0</span></div>"},
+            }
+        },
+    ],
+}
+
+# /guardians/widget-data/get-calendar-data/student-id/<id>/ -- the timetable, as
+# events with real datetimes rather than rendered HTML.
+GUARDIAN_CALENDAR = {
+    "success": True,
+    "items": [
+        {
+            "fields": {
+                "start_datetime": {"value": "2026-09-22T09:00:00"},
+                "end_datetime": {"value": "2026-09-22T10:00:00"},
+                "title": {"value": "Biology"},
+                "location": {"value": "S4"},
+                "url": {"value": "/guardians/session-ui/overview/id/95780"},
+            }
+        },
+        {
+            "fields": {
+                "start_datetime": {"value": "2026-09-22T10:05:00"},
+                "end_datetime": {"value": "2026-09-22T11:05:00"},
+                "title": {"value": "Mathematics"},
+                "location": {"value": "M2"},
+            }
+        },
+    ],
+}
+
+
+# The guardian dashboard as a real school serves it: sectioned property rows.
+# This is where work that is actually due is listed, and where the meal balance
+# is -- not on the assignments or meals pages.
+DASHBOARD_WITH_SECTIONS = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "mis-layoutcolumn",
+            "content": [
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Notices"},
+                    "content": [
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "value": "Alexander Example has no hearing test details",
+                                "url": "/guardians/medical-ui/add-hearing-test/student-id/1879",
+                            },
+                        }
+                    ],
+                },
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Assignments that are due"},
+                    "content": [
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "value": "9En4: Term 1 - Task 1 (Due 24 Sep 2026)",
+                                "description": "Waiting for student to submit",
+                                "url": "/guardians/student-ui/schoolwork-overview"
+                                "/schoolwork-id/1708/student-id/1879",
+                            },
+                        },
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "value": "9Sc3: Cell biology (Due 25 Sep 2026)",
+                                "description": "Waiting for student to submit",
+                            },
+                        },
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "value": "9Ma3: Flash Cards (Due 20 Sep 2026)",
+                                "description": "Submitted",
+                            },
+                        },
+                        # A row that is not an assignment at all.
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {"value": "View all assignments"},
+                        },
+                    ],
+                },
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Accounts "},
+                    "content": [
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "value": "Alexander Example: Meals",
+                                "description": "Balance: £4.15",
+                                "url": "/guardians/customer-account-ui/dashboard"
+                                "/customer-account-id/5964",
+                            },
+                        }
+                    ],
+                },
+            ],
+        }
+    ],
+}

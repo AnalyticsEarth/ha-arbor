@@ -21,9 +21,10 @@ from .errors import (
     ArborError,
     ArborNotAvailableError,
 )
-from . import protocol
 from .const import (
     ALL_DATA_DOMAINS,
+    GUARDIAN_CALENDAR_PATH,
+    STUDENT_KPIS_PATH,
     CALENDAR_ENTRY_LIST_PATH,
     CALENDAR_DATA_PATH,
     CALENDAR_ENTRY_LIST_PATH,
@@ -53,7 +54,12 @@ from .parser import (
     extract_attendance,
     extract_behaviour,
     extract_behaviour_rows,
-    extract_calendar_references,
+    extract_kpis,
+    extract_section_rows,
+    extract_assignments_from_sections,
+    extract_accounts_from_sections,
+    attendance_from_kpis,
+    behaviour_from_kpis,
     extract_grades,
     extract_lessons_from_calendar,
     extract_lessons_from_tables,
@@ -338,9 +344,7 @@ class ArborScraper:
             tree for key, tree in student.raw.items() if key.startswith(f"{DATA_TIMETABLE}:")
         ]
 
-        # A calendar component names the object whose events it draws, so this
-        # feed is scoped to the child and safe even when they have siblings.
-        calendar_trees = await self._calendar_object_trees(student)
+        kpi_trees, calendar_trees = await self._student_endpoint_trees(student)
         if not calendar_trees and allow_shared_sources:
             calendar_trees = await self._calendar_trees(student)
         trees[DATA_TIMETABLE].extend(calendar_trees)
@@ -352,12 +356,22 @@ class ArborScraper:
         # "Mark" column would otherwise be read as the wrong domain.
         child_trees = [*trees[DATA_ATTENDANCE], *student.raw.values()]
 
+        # The KPI list is the school's own headline figure, so it wins.
+        kpis = extract_kpis(kpi_trees)
         student.attendance = extract_attendance(child_trees)
+        if (kpi_attendance := attendance_from_kpis(kpis)) is not None:
+            student.attendance.percentage = kpi_attendance
+            student.sourced_domains.add(DATA_ATTENDANCE)
         (
             student.behaviour_points_positive,
             student.behaviour_points_negative,
             student.behaviour_incidents,
         ) = extract_behaviour(trees[DATA_BEHAVIOUR])
+        kpi_positive, kpi_negative = behaviour_from_kpis(kpis)
+        if kpi_positive is not None or kpi_negative is not None:
+            student.behaviour_points_positive = kpi_positive
+            student.behaviour_points_negative = kpi_negative
+            student.sourced_domains.add(DATA_BEHAVIOUR)
         if student.behaviour_points_net is None:
             wider_positive, wider_negative, _ = extract_behaviour(child_trees)
             student.behaviour_points_positive = (
@@ -373,25 +387,23 @@ class ArborScraper:
         if not student.behaviour_incidents:
             # Some pages log each incident as a date-labelled property row.
             student.behaviour_incidents = extract_behaviour_rows(trees[DATA_BEHAVIOUR])
-            if student.behaviour_incidents and student.behaviour_points_net is None:
-                student.behaviour_points_positive = float(
-                    sum(
-                        abs(item.points or 1)
-                        for item in student.behaviour_incidents
-                        if item.is_positive
-                    )
-                )
-                student.behaviour_points_negative = float(
-                    sum(
-                        abs(item.points or 1)
-                        for item in student.behaviour_incidents
-                        if not item.is_positive
-                    )
-                )
+            if student.behaviour_incidents:
+                student.sourced_domains.add(DATA_BEHAVIOUR)
 
         student.assignments = extract_assignments(trees[DATA_ASSIGNMENTS])
+        # The dashboard is where Arbor lists work that is actually due; the
+        # assignments page only carries counts.
+        section_rows = extract_section_rows([*shared, *student.raw.values()])
+        if not student.assignments:
+            student.assignments = extract_assignments_from_sections(section_rows)
+        if student.assignments:
+            student.sourced_domains.add(DATA_ASSIGNMENTS)
         student.grades = extract_grades(trees[DATA_PROGRESS])
         student.accounts = extract_accounts([*trees[DATA_MEALS], *student.raw.values()])
+        if not student.accounts:
+            student.accounts = extract_accounts_from_sections(section_rows)
+        if student.accounts:
+            student.sourced_domains.add(DATA_MEALS)
         student.notices = extract_notices(trees[DATA_NOTICES])
 
         # A page fetched for this child beats any guardian-wide feed.
@@ -461,43 +473,32 @@ class ArborScraper:
         self._calendar_templates_cache = working
         return trees
 
-    async def _calendar_object_trees(self, student: StudentData) -> list[Any]:
-        """Calendar events for the object this child's calendar page references.
+    async def _student_endpoint_trees(self, student: StudentData) -> tuple[list[Any], list[Any]]:
+        """The two per-child JSON endpoints the dashboard links to.
 
-        Arbor's calendar page POSTs its view, date range and an object filter;
-        asking for the same thing with the ids in the path is refused. See
-        ``Mis.calendar.Abstract.load`` in the ExtJS bundle.
+        Both are scoped to the child by id, so they are safe for a guardian with
+        siblings, and both must be fetched as plain endpoints -- asking for either
+        as a page returns a 500.
         """
-        if self._post_json is None:
-            return []
-        references = extract_calendar_references(list(student.raw.values()))
-        if not references:
-            return []
+        kpis: list[Any] = []
+        calendar: list[Any] = []
+        if not student.student_id.isdigit():
+            return kpis, calendar
 
-        today = date.today()
-        end = today + timedelta(days=7)
-        trees: list[Any] = []
-        for object_id, type_id in references[:1]:
-            body = protocol.calendar_request_body(
-                view="period",
-                start_date=today.isoformat(),
-                end_date=end.isoformat(),
-                object_id=object_id,
-                object_type_id=type_id,
-            )
-            try:
-                response = await self._post_json(CALENDAR_ENTRY_LIST_PATH, body)
-            except (ArborAuthError, ArborConfigurationError):
-                raise
-            except ArborError as err:
-                self._log.debug("Calendar POST refused: %s", err)
-                continue
-            if response is None:
-                continue
-            payload = protocol.calendar_response_payload(response)
-            trees.append(payload)
-            student.raw[f"calendar:POST {CALENDAR_ENTRY_LIST_PATH}"] = payload
-        return trees
+        kpi_tree = await self._try_json(
+            STUDENT_KPIS_PATH.format(student_id=student.student_id)
+        )
+        if kpi_tree is not None:
+            kpis.append(kpi_tree)
+            student.raw["kpis"] = kpi_tree
+
+        calendar_tree = await self._try_json(
+            GUARDIAN_CALENDAR_PATH.format(student_id=student.student_id)
+        )
+        if calendar_tree is not None:
+            calendar.append(calendar_tree)
+            student.raw["calendar"] = calendar_tree
+        return kpis, calendar
 
     def _calendar_templates(self) -> list[tuple[str, tuple[str, ...]]]:
         """Endpoint bases paired with the path suffixes worth trying."""

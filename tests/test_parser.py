@@ -339,6 +339,118 @@ class TestFormPayloads(unittest.TestCase):
         )
 
 
+class TestDashboardSectionRows(unittest.TestCase):
+    """The dashboard is where work due and balances are actually listed."""
+
+    def setUp(self) -> None:
+        self.rows = parser.extract_section_rows([pages.DASHBOARD_WITH_SECTIONS])
+
+    def test_each_row_knows_its_section(self) -> None:
+        sections = {row.section for row in self.rows}
+        self.assertEqual(
+            sections, {"Notices", "Assignments that are due", "Accounts"}
+        )
+
+    def test_rows_are_not_attributed_to_an_outer_section_as_well(self) -> None:
+        # One notice, four under assignments, one account: each counted once,
+        # not also against the enclosing layout column.
+        self.assertEqual(len(self.rows), 6)
+
+    def test_assignments_are_parsed_from_their_row_text(self) -> None:
+        items = parser.extract_assignments_from_sections(self.rows)
+        self.assertEqual(len(items), 3)
+        first = items[0]
+        self.assertEqual(first.title, "Flash Cards")
+        self.assertEqual(first.subject, "9Ma3")
+        self.assertEqual(first.due, datetime(2026, 9, 20))
+        self.assertTrue(first.is_submitted)
+
+    def test_the_status_comes_from_the_description(self) -> None:
+        items = parser.extract_assignments_from_sections(self.rows)
+        waiting = next(item for item in items if item.title == "Cell biology")
+        self.assertEqual(waiting.status, "Waiting for student to submit")
+        self.assertFalse(waiting.is_submitted)
+
+    def test_a_row_that_is_not_an_assignment_is_skipped(self) -> None:
+        titles = [
+            item.title for item in parser.extract_assignments_from_sections(self.rows)
+        ]
+        self.assertNotIn("View all assignments", titles)
+
+    def test_rows_outside_an_assignments_section_are_ignored(self) -> None:
+        # The Notices row also has no "(Due ...)", but the section gate is first.
+        items = parser.extract_assignments_from_sections(self.rows)
+        self.assertFalse(any("hearing" in item.title for item in items))
+
+    def test_the_balance_comes_from_the_description(self) -> None:
+        accounts = parser.extract_accounts_from_sections(self.rows)
+        self.assertEqual(len(accounts), 1)
+        self.assertEqual(accounts[0].name, "Meals")
+        self.assertEqual(accounts[0].balance, 4.15)
+
+    def test_a_row_without_a_balance_is_not_an_account(self) -> None:
+        rows = [parser.SectionRow(section="Activities", text="X: Trips")]
+        self.assertEqual(parser.extract_accounts_from_sections(rows), [])
+
+
+class TestKpiEndpoint(unittest.TestCase):
+    """The per-child KPI list: a caption plus a number inside HTML."""
+
+    def setUp(self) -> None:
+        self.kpis = parser.extract_kpis([pages.STUDENT_KPIS])
+
+    def test_all_four_are_read(self) -> None:
+        self.assertEqual(len(self.kpis), 4)
+
+    def test_attendance_is_found_by_its_caption(self) -> None:
+        self.assertEqual(parser.attendance_from_kpis(self.kpis), 100.0)
+
+    def test_behaviour_totals_are_found_by_their_captions(self) -> None:
+        positive, negative = parser.behaviour_from_kpis(self.kpis)
+        self.assertEqual(positive, 35.0)
+        self.assertEqual(negative, 0.0)
+
+    def test_nothing_is_invented_when_there_are_no_kpis(self) -> None:
+        self.assertIsNone(parser.attendance_from_kpis([]))
+        self.assertEqual(parser.behaviour_from_kpis([]), (None, None))
+
+
+class TestGuardianCalendarFeed(unittest.TestCase):
+    """Events keyed start_datetime/end_datetime, wrapped in field objects."""
+
+    def test_lessons_are_read_with_their_times_and_rooms(self) -> None:
+        lessons = parser.extract_lessons_from_calendar(pages.GUARDIAN_CALENDAR)
+        self.assertEqual(len(lessons), 2)
+        self.assertEqual(lessons[0].summary, "Biology")
+        self.assertEqual(lessons[0].start, datetime(2026, 9, 22, 9, 0))
+        self.assertEqual(lessons[0].end, datetime(2026, 9, 22, 10, 0))
+        self.assertEqual(lessons[0].location, "S4")
+
+
+class TestPointsAreNotInvented(unittest.TestCase):
+    """Only a number the text calls a point is a point."""
+
+    def test_a_bare_number_is_not_points(self) -> None:
+        tree = {
+            "props": {
+                "fieldLabel": "21 Sep 2026",
+                "value": "Room C1.5 with Mr Hale, period 3",
+            }
+        }
+        incidents = parser.extract_behaviour_rows([tree])
+        self.assertEqual(len(incidents), 1)
+        self.assertIsNone(incidents[0].points)
+
+    def test_a_stated_point_value_is_read(self) -> None:
+        tree = {
+            "props": {
+                "fieldLabel": "21 Sep 2026",
+                "value": "Excellent work &nbsp; 2 points &nbsp; Biology",
+            }
+        }
+        self.assertEqual(parser.extract_behaviour_rows([tree])[0].points, 2.0)
+
+
 class TestWrappedNavigationLinks(unittest.TestCase):
     """Navigation fields arrive as {"value": ...}, not as bare strings."""
 

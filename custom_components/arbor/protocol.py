@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import quote
 
 from .const import ARBOR_LOGIN_HOST, AUTH_LOGIN_PATH, SCHOOL_SEARCH_PATH
@@ -138,12 +139,47 @@ def parse_login(body: str, status: int) -> str:
     if not data.get("success") or not (
         isinstance(first, dict) and first.get("logged_in") is True
     ):
-        raise ArborAuthError("Arbor rejected the email address or password")
+        raise ArborAuthError(login_rejection_reason(data))
 
     session_id = first.get("session_id")
     if not session_id:
         raise ArborConnectionError("Arbor logged in but returned no session id")
     return str(session_id)
+
+
+def login_rejection_reason(data: Any) -> str:
+    """Why Arbor turned a login down, in its own words where it gives them.
+
+    Arbor answers a locked or throttled account the same way it answers a wrong
+    password -- ``success: false`` -- but it often explains itself in
+    ``login_form_message``, and disables the form outright when an account is
+    locked. Discarding that turned "your account is locked" into "check your
+    password", which is the opposite of the right advice.
+    """
+    items = data.get("items") if isinstance(data, dict) else None
+    first = items[0] if isinstance(items, list) and items else {}
+    if not isinstance(first, dict):
+        first = {}
+
+    for candidate in (
+        first.get("login_form_message"),
+        first.get("message"),
+        (data.get("action_params") or {}).get("message")
+        if isinstance(data, dict) and isinstance(data.get("action_params"), dict)
+        else None,
+        data.get("message") if isinstance(data, dict) else None,
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return f"Arbor refused the login: {candidate.strip()}"
+
+    if first.get("login_form_enabled") is False:
+        return (
+            "Arbor has disabled the login form for this account, which usually means "
+            "it is locked after too many attempts. Reset the password from "
+            "login.arbor.sc rather than retrying"
+        )
+
+    return "Arbor rejected the email address or password"
 
 
 def session_handshake_url(base_url: str, session_id: str) -> str:

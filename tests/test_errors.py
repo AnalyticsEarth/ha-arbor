@@ -222,3 +222,64 @@ class TestOnlyTheLoginStepRaisesAnAuthError(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLoginRejectionReason(unittest.TestCase):
+    """Arbor's own words matter: a lockout and a typo look identical otherwise."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from _loader import load
+
+        cls.protocol = load("protocol")
+
+    def _reason(self, payload: dict) -> str:
+        import json
+
+        with self.assertRaises(errors.ArborAuthError) as caught:
+            self.protocol.parse_login(json.dumps(payload), 200)
+        return str(caught.exception)
+
+    def test_a_plain_rejection_falls_back(self) -> None:
+        self.assertIn(
+            "rejected the email address or password",
+            self._reason({"success": False, "items": [{"logged_in": False}]}),
+        )
+
+    def test_arbors_message_is_surfaced(self) -> None:
+        reason = self._reason(
+            {
+                "success": True,
+                "items": [
+                    {
+                        "logged_in": False,
+                        "login_form_message": "Too many failed attempts.",
+                    }
+                ],
+            }
+        )
+        self.assertIn("Too many failed attempts.", reason)
+
+    def test_a_disabled_form_reads_as_a_lockout(self) -> None:
+        reason = self._reason(
+            {"success": True, "items": [{"logged_in": False, "login_form_enabled": False}]}
+        )
+        self.assertIn("locked", reason)
+        self.assertIn("rather than retrying", reason)
+
+    def test_a_message_in_action_params_is_found(self) -> None:
+        reason = self._reason(
+            {"success": False, "action_params": {"message": "Your account is locked."}}
+        )
+        self.assertIn("Your account is locked.", reason)
+
+    def test_a_successful_login_still_returns_its_session(self) -> None:
+        import json
+
+        session = self.protocol.parse_login(
+            json.dumps(
+                {"success": True, "items": [{"logged_in": True, "session_id": "abc123"}]}
+            ),
+            200,
+        )
+        self.assertEqual(session, "abc123")

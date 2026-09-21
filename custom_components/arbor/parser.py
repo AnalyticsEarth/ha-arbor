@@ -15,6 +15,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -697,6 +698,31 @@ def parse_date(value: Any) -> date | None:
     return None
 
 
+# A date sitting inside a longer string. Arbor's assignment page puts the course
+# and the deadline in one field -- "Music KS4: 9B/Mu, 25 Sep 2026" -- which no
+# whole-string date format matches.
+_DATE_IN_TEXT_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}"
+    r"|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"
+    r"|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\.?\s+\d{4}"
+    r"|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}",
+    re.IGNORECASE,
+)
+
+
+def find_date(value: Any) -> date | None:
+    """A date anywhere in *value*, whole-string parsing first."""
+    if (parsed := parse_date(value)) is not None:
+        return parsed
+    text = text_of(value)
+    if not text:
+        return None
+    for match in _DATE_IN_TEXT_RE.finditer(text):
+        if (parsed := parse_date(match.group(0))) is not None:
+            return parsed
+    return None
+
+
 def _from_timestamp(value: float) -> datetime | None:
     """A unix timestamp in seconds or milliseconds."""
     try:
@@ -1180,23 +1206,84 @@ def extract_behaviour_rows(trees: list[Any]) -> list[BehaviourIncident]:
     return incidents
 
 
+# Arbor renders a multi-field row as one <div> per field, each of the form
+# "<b>Label:</b> value". The behaviour log is the case that matters: a row reads
+# "Behaviour: Motivation", "Narrative: Good work completed in lesson",
+# "Recorded by: Mr Fuller", "Event: Maths KS4: 9Ma3". Flattening that to text
+# loses the field boundaries -- and an empty Narrative runs straight into the
+# next label -- so the fields are read from the markup instead.
+_HTML_FIELD_RE = re.compile(
+    r"<b>\s*(?P<label>[^<:]{1,40}?)\s*:?\s*</b>(?P<value>.*?)(?=<b>|</div>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def parse_labelled_html(value: Any) -> dict[str, str]:
+    """Field name to field value for an HTML fragment of "<b>Label:</b> value" pairs.
+
+    An empty value is left out: Arbor emits "<b>Narrative:</b> " for an incident
+    the teacher wrote no comment on, and an empty string says no more than a
+    missing key does.
+    """
+    if not isinstance(value, str) or "<b>" not in value.casefold():
+        return {}
+    fields: dict[str, str] = {}
+    for match in _HTML_FIELD_RE.finditer(value):
+        label = strip_html(match.group("label"))
+        text = strip_html(match.group("value"))
+        if label and text and label not in fields:
+            fields[label] = text
+    return fields
+
+
 @dataclass(slots=True)
 class SectionRow:
-    """A dashboard row, with the section heading it sits under."""
+    """A property row, with the headings above it and its own field label."""
 
     section: str
     text: str
     description: str | None = None
     url: str | None = None
+    #: The row's own ``fieldLabel``: "Due", "Course", or an incident's date.
+    label: str | None = None
+    #: Nearest ``mis-subsection`` heading. Arbor nests "Positive Incidents
+    #: Breakdown" inside "Positive Incidents", and only the outer heading says
+    #: whether the incidents listed below it are positive or negative.
+    subsection: str = ""
+    #: "<b>Label:</b> value" pairs parsed out of this row's HTML value.
+    fields: dict[str, str] = field(default_factory=dict)
+
+    def mentions(self, *keywords: str) -> bool:
+        """Whether either heading above this row contains one of *keywords*."""
+        haystack = f"{self.section} {self.subsection}".casefold()
+        return any(keyword.casefold() in haystack for keyword in keywords)
+
+    def value_of(self, *names: str) -> str | None:
+        """The first parsed field whose label matches one of *names*."""
+        for name in names:
+            for label, value in self.fields.items():
+                if label.casefold() == name.casefold():
+                    return value
+        return None
 
 
-def _iter_section_rows(node: Any, section: str = "") -> Iterator[SectionRow]:
-    """Walk a tree yielding property rows tagged with their nearest section."""
+def _iter_section_rows(
+    node: Any, section: str = "", subsection: str = ""
+) -> Iterator[SectionRow]:
+    """Walk a tree yielding property rows tagged with the headings above them."""
     if isinstance(node, dict):
         xtype = node.get("xtype")
         props = node.get("props") if isinstance(node.get("props"), dict) else {}
-        if isinstance(xtype, str) and "section" in xtype.casefold():
-            section = text_of(props.get("title")) or section
+        if isinstance(xtype, str):
+            lowered = xtype.casefold()
+            # "mis-subsection" also contains "section", so test for it first.
+            # Letting the inner heading overwrite the outer one loses a
+            # behaviour incident's polarity, which only the outer one carries.
+            if "subsection" in lowered:
+                subsection = text_of(props.get("title")) or subsection
+            elif "section" in lowered:
+                section = text_of(props.get("title")) or section
+                subsection = ""
         if xtype == "mis-property-row":
             url = props.get("url")
             yield SectionRow(
@@ -1204,27 +1291,39 @@ def _iter_section_rows(node: Any, section: str = "") -> Iterator[SectionRow]:
                 text=text_of(props.get("value")) or "",
                 description=text_of(props.get("description")),
                 url=url if isinstance(url, str) else None,
+                label=text_of(props.get("fieldLabel")),
+                subsection=subsection.strip(),
+                fields=parse_labelled_html(props.get("value")),
             )
             return
         for value in node.values():
-            yield from _iter_section_rows(value, section)
+            yield from _iter_section_rows(value, section, subsection)
     elif isinstance(node, (list, tuple)):
         for item in node:
-            yield from _iter_section_rows(item, section)
+            yield from _iter_section_rows(item, section, subsection)
 
 
 def extract_section_rows(trees: list[Any]) -> list[SectionRow]:
-    """Every dashboard property row, with its section heading."""
+    """Every property row across *trees*, with the headings above it.
+
+    Rows are deduplicated across trees but not within one. Two behaviour
+    incidents on the same day, of the same kind, recorded by the same teacher in
+    the same lesson are two incidents, and collapsing them undercounted a term's
+    achievements by four.
+    """
     rows: list[SectionRow] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str, str | None, int]] = set()
     for tree in trees:
+        occurrences: Counter[tuple[str, str, str, str | None]] = Counter()
         for row in _iter_section_rows(tree):
             if not row.text:
                 continue
-            key = (row.section, row.text)
-            if key in seen:
+            key = (row.section, row.subsection, row.text, row.label)
+            occurrences[key] += 1
+            composite = (*key, occurrences[key])
+            if composite in seen:
                 continue
-            seen.add(key)
+            seen.add(composite)
             rows.append(row)
     return rows
 
@@ -1237,16 +1336,17 @@ _DUE_ROW_RE = re.compile(
 
 
 def extract_assignments_from_sections(rows: list[SectionRow]) -> list[Assignment]:
-    """Assignments listed as dashboard rows.
+    """Assignments listed as dashboard or assignments-page rows.
 
-    The guardian dashboard is where Arbor actually lists work that is due; the
-    assignments *page* is a layout with counts on it. Each row reads
-    "<class>: <title> (Due <date>)", with the submission status alongside.
+    Each row reads "<class>: <title> (Due <date>)", with the submission status
+    alongside and a link to the piece of work's own page. That link is where the
+    subject, the marking scheme and the teacher's instructions live; see
+    :func:`extract_assignment_details`.
     """
     assignments: list[Assignment] = []
     seen: set[str] = set()
     for row in rows:
-        if "assignment" not in row.section.casefold():
+        if not row.mentions("assignment"):
             continue
         match = _DUE_ROW_RE.match(row.text)
         if match is None:
@@ -1255,10 +1355,14 @@ def extract_assignments_from_sections(rows: list[SectionRow]) -> list[Assignment
         if not title or title.casefold() in seen:
             continue
         seen.add(title.casefold())
+        # Arbor shows the class code here, not the subject: "9En4", not
+        # "English Language KS4". The detail page corrects it.
+        class_code = (match.group("subject") or "").strip() or None
         assignments.append(
             Assignment(
                 title=title,
-                subject=(match.group("subject") or "").strip() or None,
+                subject=class_code,
+                class_code=class_code,
                 due=parse_datetime(match.group("due")),
                 status=row.description,
                 url=row.url,
@@ -1266,6 +1370,203 @@ def extract_assignments_from_sections(rows: list[SectionRow]) -> list[Assignment
         )
     assignments.sort(key=lambda item: (item.due is None, item.due or datetime.max))
     return assignments
+
+
+@dataclass(slots=True)
+class AssignmentDetail:
+    """The labelled fields of one assignment's own page."""
+
+    title: str
+    due: str | None = None
+    course: str | None = None
+    marking: str | None = None
+    status: str | None = None
+    submission_type: str | None = None
+    instructions: str | None = None
+
+
+def extract_assignment_details(trees: list[Any]) -> dict[str, AssignmentDetail]:
+    """Assignment detail pages, keyed by casefolded title.
+
+    Every "Assignments that are due" row links to a page of labelled rows --
+    Title, Due, Course, Marking, Status, Submission Type -- followed by the
+    teacher's instructions. That page is the only place the subject is spelled
+    out; the list itself carries the class code and nothing more.
+    """
+    details: dict[str, AssignmentDetail] = {}
+    for tree in trees:
+        labelled: dict[str, str] = {}
+        for row in _iter_section_rows(tree):
+            if row.label and row.text and row.label.casefold() not in labelled:
+                labelled[row.label.casefold()] = row.text
+        title = labelled.get("title")
+        if not title:
+            continue
+        # Guard against reading some other labelled page as a piece of work.
+        if not labelled.keys() & {"course", "due", "submission type"}:
+            continue
+        key = title.casefold()
+        if key in details:
+            continue
+        details[key] = AssignmentDetail(
+            title=title,
+            due=labelled.get("due"),
+            course=labelled.get("course"),
+            marking=labelled.get("marking") or labelled.get("mark"),
+            status=labelled.get("status"),
+            submission_type=labelled.get("submission type"),
+            instructions=labelled.get("instructions"),
+        )
+    return details
+
+
+def split_course(course: str) -> tuple[str | None, str | None]:
+    """"English Language KS4: 9En4" -> subject name, class code."""
+    subject, separator, class_code = course.partition(":")
+    if not separator:
+        return course.strip() or None, None
+    return subject.strip() or None, class_code.strip() or None
+
+
+def enrich_assignments(
+    items: list[Assignment], details: dict[str, AssignmentDetail]
+) -> list[Assignment]:
+    """Fill in what only an assignment's own page says.
+
+    The marking scheme is deliberately not copied into ``grade``: "No mark" and
+    "Number" describe how the work will be marked, not how it was.
+    """
+    if not details:
+        return items
+    for item in items:
+        detail = details.get(item.title.casefold())
+        if detail is None:
+            continue
+        item.course = detail.course or item.course
+        if detail.course:
+            subject, class_code = split_course(detail.course)
+            if subject:
+                item.class_code = class_code or item.class_code
+                item.subject = subject
+        item.status = item.status or detail.status
+        item.marking = detail.marking or item.marking
+        item.submission_type = detail.submission_type or item.submission_type
+        item.instructions = detail.instructions or item.instructions
+        if item.due is None and detail.due:
+            item.due = parse_datetime(detail.due) or _as_datetime(find_date(detail.due))
+    return items
+
+
+def _as_datetime(value: date | None) -> datetime | None:
+    """Midnight on *value*, so a due date can share Assignment.due's type."""
+    if value is None:
+        return None
+    return datetime.combine(value, time.min)
+
+
+_POLARITIES = ("positive", "negative", "neutral")
+
+_INCIDENT_COUNT_RE = re.compile(
+    r"(-?\d+(?:\.\d+)?)\s+(positive|negative|neutral)\s+incident", re.IGNORECASE
+)
+
+
+def _polarity_of(row: SectionRow) -> str | None:
+    """Which of positive, negative or neutral the row's headings say."""
+    for polarity in _POLARITIES:
+        if row.mentions(polarity):
+            return polarity
+    return None
+
+
+def extract_behaviour_totals(rows: list[SectionRow]) -> dict[str, dict[str, float]]:
+    """Incident counts by polarity and period, e.g. ``{"positive": {"Autumn": 35}}``.
+
+    The behaviour page states each total three times, labelled "Lifetime", the
+    academic year and the current term. That is what makes both "129 positive
+    incidents" and "35 positive incidents" true on the same page, and why a
+    single headline number needs saying which period it covers.
+    """
+    totals: dict[str, dict[str, float]] = {}
+    for row in rows:
+        if not row.label or row.mentions("breakdown"):
+            continue
+        match = _INCIDENT_COUNT_RE.search(row.text)
+        if match is None:
+            continue
+        totals.setdefault(match.group(2).casefold(), {})[row.label] = float(match.group(1))
+    return totals
+
+
+# "2026/2027" -- the label Arbor gives the academic-year total.
+_ACADEMIC_YEAR_LABEL_RE = re.compile(r"\b\d{4}\s*[/-]\s*\d{2,4}\b")
+
+
+def headline_behaviour_total(periods: dict[str, float]) -> float | None:
+    """The one figure worth putting on a sensor, out of the several stated.
+
+    Arbor gives a total for the child's lifetime, for the academic year and for
+    the term. The academic year is what the school's own KPI panel shows, so
+    preferring it keeps the sensor agreeing with the portal at schools that
+    publish both -- and stops a sensor reading 129 where the portal says 35.
+    """
+    if not periods:
+        return None
+    for label, count in periods.items():
+        if _ACADEMIC_YEAR_LABEL_RE.search(label):
+            return count
+    for label, count in periods.items():
+        if "lifetime" not in label.casefold():
+            return count
+    return next(iter(periods.values()))
+
+
+def extract_behaviour_incidents(rows: list[SectionRow]) -> list[BehaviourIncident]:
+    """One entry per logged incident, from the behaviour page's breakdown rows.
+
+    A breakdown row carries the behaviour type, the teacher's narrative, who
+    recorded it and which lesson it happened in as labelled fields inside its
+    HTML value; the date is the row's own label, and the polarity comes from the
+    section heading above it.
+    """
+    incidents: list[BehaviourIncident] = []
+    for row in rows:
+        if not row.mentions("behaviour", "behavior", "incident"):
+            continue
+        kind = row.value_of("behaviour", "behavior", "type")
+        if not kind:
+            continue
+        polarity = _polarity_of(row)
+        event = row.value_of("event", "lesson", "activity")
+        subject, class_code = split_course(event) if event else (None, None)
+
+        # Only a number the text actually calls a point. Wrotham publishes none,
+        # and taking the first number in the fragment instead produced a total of
+        # 203 points across 31 incidents, which meant nothing.
+        points: float | None = None
+        if (match := _POINTS_RE.search(row.text)) is not None:
+            points = float(match.group(1))
+            if polarity == "negative":
+                points = -abs(points)
+
+        incidents.append(
+            BehaviourIncident(
+                occurred=parse_date(row.label),
+                kind=kind,
+                points=points,
+                subject=subject,
+                staff=row.value_of("recorded by", "staff", "recorded"),
+                comment=row.value_of("narrative", "comment", "note"),
+                polarity=polarity,
+                event=event,
+                class_code=class_code,
+            )
+        )
+
+    incidents.sort(
+        key=lambda item: (item.occurred is None, item.occurred or date.min), reverse=True
+    )
+    return incidents
 
 
 def extract_accounts_from_sections(rows: list[SectionRow]) -> list[AccountBalance]:

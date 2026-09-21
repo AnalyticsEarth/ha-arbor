@@ -54,7 +54,12 @@ from .parser import (
     extract_attendance,
     extract_behaviour,
     extract_behaviour_rows,
+    extract_behaviour_incidents,
+    extract_behaviour_totals,
+    extract_assignment_details,
+    enrich_assignments,
     extract_kpis,
+    headline_behaviour_total,
     extract_section_rows,
     extract_assignments_from_sections,
     extract_accounts_from_sections,
@@ -90,15 +95,18 @@ HOMEPAGE_CANDIDATES = (
 # Upper bound on requests per child per refresh, so an unusual portal layout
 # cannot turn one update into hundreds of requests. Covers discovered pages and
 # the content those pages load.
-MAX_REQUESTS_PER_STUDENT = 24
+MAX_REQUESTS_PER_STUDENT = 40
 
 # Arbor's guardian pages return a layout whose components fetch their own
 # content, so a page has to be followed to reach any data. Two levels is enough
 # for every layout seen; more would risk walking the whole portal.
 MAX_CONTENT_DEPTH = 2
 
-# Content URLs to follow from any single page.
-MAX_CONTENT_PER_PAGE = 4
+# Content URLs to follow from any single page. Each assignment that is due is a
+# row linking to its own page, and that page is the only place the subject is
+# named, so a cap below a busy week's homework silently drops detail rather than
+# failing. The per-student budget above is the real limit on total requests.
+MAX_CONTENT_PER_PAGE = 10
 
 # More candidates than this almost certainly means discovery matched something
 # that is not a person.
@@ -372,6 +380,21 @@ class ArborScraper:
             student.behaviour_points_positive = kpi_positive
             student.behaviour_points_negative = kpi_negative
             student.sourced_domains.add(DATA_BEHAVIOUR)
+        # The behaviour page itself lists every incident with its type, subject,
+        # teacher and narrative, which no table or metric on it carries, and
+        # states its totals per period.
+        behaviour_rows = extract_section_rows(trees[DATA_BEHAVIOUR])
+        student.behaviour_totals = extract_behaviour_totals(behaviour_rows)
+        if student.behaviour_points_net is None and student.behaviour_totals:
+            # No KPI panel at this school: the page's own totals are the
+            # headline, taken for the same period the panel would have covered.
+            student.behaviour_points_positive = headline_behaviour_total(
+                student.behaviour_totals.get("positive", {})
+            )
+            student.behaviour_points_negative = headline_behaviour_total(
+                student.behaviour_totals.get("negative", {})
+            )
+            student.sourced_domains.add(DATA_BEHAVIOUR)
         if student.behaviour_points_net is None:
             wider_positive, wider_negative, _ = extract_behaviour(child_trees)
             student.behaviour_points_positive = (
@@ -384,7 +407,10 @@ class ArborScraper:
                 if student.behaviour_points_negative is not None
                 else wider_negative
             )
-        if not student.behaviour_incidents:
+        if detailed := extract_behaviour_incidents(behaviour_rows):
+            student.behaviour_incidents = detailed
+            student.sourced_domains.add(DATA_BEHAVIOUR)
+        elif not student.behaviour_incidents:
             # Some pages log each incident as a date-labelled property row.
             student.behaviour_incidents = extract_behaviour_rows(trees[DATA_BEHAVIOUR])
             if student.behaviour_incidents:
@@ -397,6 +423,13 @@ class ArborScraper:
         if not student.assignments:
             student.assignments = extract_assignments_from_sections(section_rows)
         if student.assignments:
+            # Each row links to the work's own page, which is the only place the
+            # subject is named and the instructions are given.
+            # Not just the assignments bucket: a detail page can be classified
+            # under whichever page linked to it.
+            student.assignments = enrich_assignments(
+                student.assignments, extract_assignment_details(list(student.raw.values()))
+            )
             student.sourced_domains.add(DATA_ASSIGNMENTS)
         student.grades = extract_grades(trees[DATA_PROGRESS])
         student.accounts = extract_accounts([*trees[DATA_MEALS], *student.raw.values()])

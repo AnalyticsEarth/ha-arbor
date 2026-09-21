@@ -765,6 +765,211 @@ class TestPageFilteringForSiblings(unittest.TestCase):
             result, {const.DATA_ATTENDANCE: {"Attendance": "/guardians/attendance/index"}}
         )
 
+class TestLabelledHtmlFields(unittest.TestCase):
+    """Arbor packs several named fields into one row's HTML value."""
+
+    def test_reads_each_bold_label_as_a_field(self) -> None:
+        fields = parser.parse_labelled_html(
+            "<div><b>Behaviour:</b> Motivation</div><div><b>Recorded by:</b> Mr Fuller</div>"
+        )
+        self.assertEqual(fields, {"Behaviour": "Motivation", "Recorded by": "Mr Fuller"})
+
+    def test_an_empty_field_is_left_out(self) -> None:
+        # Arbor emits "<b>Narrative:</b> " when the teacher wrote no comment, and
+        # flattening the row to text runs that straight into the next label.
+        fields = parser.parse_labelled_html(
+            "<div><b>Narrative:</b> </div><div><b>Recorded by:</b> Mr Burton</div>"
+        )
+        self.assertEqual(fields, {"Recorded by": "Mr Burton"})
+
+    def test_plain_text_has_no_fields(self) -> None:
+        self.assertEqual(parser.parse_labelled_html("35 positive incidents"), {})
+        self.assertEqual(parser.parse_labelled_html(None), {})
+
+    def test_a_value_may_itself_contain_a_colon(self) -> None:
+        fields = parser.parse_labelled_html("<div><b>Event:</b> Maths KS4: 9Ma3</div>")
+        self.assertEqual(fields["Event"], "Maths KS4: 9Ma3")
+
+
+class TestSectionRowHeadings(unittest.TestCase):
+    """A row's meaning depends on both headings above it."""
+
+    def test_subsection_does_not_overwrite_its_section(self) -> None:
+        rows = parser.extract_section_rows([pages.BEHAVIOUR_INCIDENT_BREAKDOWN])
+        breakdown = [row for row in rows if row.subsection.endswith("Breakdown")]
+        self.assertTrue(breakdown)
+        # "mis-subsection" contains the word "section"; letting it win loses the
+        # polarity, which only the outer heading states.
+        self.assertTrue(any(row.section == "Positive Incidents" for row in breakdown))
+        self.assertTrue(any(row.section == "Negative Incidents" for row in breakdown))
+
+    def test_mentions_checks_both_headings(self) -> None:
+        row = parser.SectionRow(section="Positive Incidents", text="x", subsection="Breakdown")
+        self.assertTrue(row.mentions("positive"))
+        self.assertTrue(row.mentions("breakdown"))
+        self.assertFalse(row.mentions("negative"))
+
+    def test_identical_rows_in_one_page_are_all_kept(self) -> None:
+        rows = parser.extract_section_rows([pages.BEHAVIOUR_INCIDENT_BREAKDOWN])
+        respect = [row for row in rows if "Respect" in row.text]
+        # Two Respect incidents, same day, same teacher, same lesson: two
+        # incidents. Deduplicating them undercounted a term's total by four.
+        self.assertEqual(len(respect), 2)
+
+    def test_the_same_page_read_twice_is_not_counted_twice(self) -> None:
+        once = parser.extract_section_rows([pages.BEHAVIOUR_INCIDENT_BREAKDOWN])
+        twice = parser.extract_section_rows(
+            [pages.BEHAVIOUR_INCIDENT_BREAKDOWN, pages.BEHAVIOUR_INCIDENT_BREAKDOWN]
+        )
+        self.assertEqual(len(once), len(twice))
+
+
+class TestBehaviourIncidentDetail(unittest.TestCase):
+    """Each incident's date, type, subject, teacher and narrative."""
+
+    def setUp(self) -> None:
+        self.rows = parser.extract_section_rows([pages.BEHAVIOUR_INCIDENT_BREAKDOWN])
+        self.incidents = parser.extract_behaviour_incidents(self.rows)
+
+    def test_reads_every_incident(self) -> None:
+        self.assertEqual(len(self.incidents), 5)
+
+    def test_newest_first(self) -> None:
+        self.assertEqual(self.incidents[0].occurred, date(2026, 9, 21))
+
+    def test_carries_the_fields_behind_the_number(self) -> None:
+        latest = self.incidents[0]
+        self.assertEqual(latest.kind, "Motivation")
+        self.assertEqual(latest.subject, "Maths KS4")
+        self.assertEqual(latest.class_code, "9Ma3")
+        self.assertEqual(latest.event, "Maths KS4: 9Ma3")
+        self.assertEqual(latest.staff, "Mr Fuller")
+        self.assertEqual(latest.comment, "Good work completed in lesson")
+        self.assertEqual(latest.polarity, "positive")
+        self.assertTrue(latest.is_positive)
+
+    def test_polarity_comes_from_the_section_not_the_wording(self) -> None:
+        negative = [item for item in self.incidents if item.polarity == "negative"]
+        self.assertEqual(len(negative), 1)
+        # "Disruption" is in no keyword list; the heading above it is the source.
+        self.assertEqual(negative[0].kind, "Disruption")
+        self.assertTrue(negative[0].is_negative)
+        self.assertFalse(negative[0].is_positive)
+
+    def test_a_negative_incidents_points_are_signed(self) -> None:
+        negative = next(item for item in self.incidents if item.polarity == "negative")
+        self.assertEqual(negative.points, -2)
+
+    def test_points_are_not_invented_when_none_are_published(self) -> None:
+        # Wrotham publishes behaviour types and no points at all. Reading the
+        # first number in each row gave a total of 203 that meant nothing.
+        self.assertIsNone(self.incidents[0].points)
+
+    def test_a_non_lesson_event_yields_no_subject(self) -> None:
+        assembly = next(item for item in self.incidents if item.kind == "Communication")
+        self.assertEqual(assembly.event, "Open Evening Tour Guides")
+        self.assertIsNone(assembly.class_code)
+
+    def test_an_empty_narrative_is_absent_not_blank(self) -> None:
+        respect = next(item for item in self.incidents if item.kind == "Respect")
+        self.assertIsNone(respect.comment)
+
+    def test_summary_rows_are_not_read_as_incidents(self) -> None:
+        self.assertFalse(any("incidents" in (item.kind or "") for item in self.incidents))
+
+    def test_totals_are_kept_per_polarity_and_period(self) -> None:
+        totals = parser.extract_behaviour_totals(self.rows)
+        self.assertEqual(
+            totals["positive"], {"Lifetime": 129.0, "2026/2027": 35.0, "Autumn": 35.0}
+        )
+        self.assertEqual(totals["negative"]["Lifetime"], 4.0)
+        self.assertEqual(totals["neutral"]["Lifetime"], 2.0)
+
+    def test_the_headline_total_prefers_the_academic_year(self) -> None:
+        totals = parser.extract_behaviour_totals(self.rows)
+        self.assertEqual(parser.headline_behaviour_total(totals["positive"]), 35.0)
+
+    def test_the_headline_falls_back_past_lifetime(self) -> None:
+        self.assertEqual(
+            parser.headline_behaviour_total({"Lifetime": 129.0, "Autumn": 35.0}), 35.0
+        )
+        # Lifetime alone is better than nothing, but only as a last resort.
+        self.assertEqual(parser.headline_behaviour_total({"Lifetime": 129.0}), 129.0)
+        self.assertIsNone(parser.headline_behaviour_total({}))
+
+    def test_a_breakdown_row_is_not_a_total(self) -> None:
+        totals = parser.extract_behaviour_totals(self.rows)
+        # Every recorded period, and no incident dates among them.
+        for periods in totals.values():
+            self.assertEqual(set(periods), {"Lifetime", "2026/2027", "Autumn"})
+
+
+class TestAssignmentDetail(unittest.TestCase):
+    """The assignment's own page names the subject the list only codes."""
+
+    def setUp(self) -> None:
+        self.details = parser.extract_assignment_details(
+            [pages.ASSIGNMENT_DETAIL_PAGE, pages.ASSIGNMENT_DETAIL_COURSE_IN_DUE]
+        )
+
+    def test_reads_both_pages(self) -> None:
+        self.assertEqual(set(self.details), {"term 1 - task 1", "cell biology"})
+
+    def test_carries_every_labelled_field(self) -> None:
+        detail = self.details["term 1 - task 1"]
+        self.assertEqual(detail.course, "English Language KS4: 9En4")
+        self.assertEqual(detail.marking, "No mark")
+        self.assertEqual(detail.status, "Waiting for student to submit")
+        self.assertEqual(detail.submission_type, "Physical/Other")
+        self.assertIn("Perspective", detail.instructions or "")
+
+    def test_a_page_that_is_not_an_assignment_is_ignored(self) -> None:
+        self.assertEqual(parser.extract_assignment_details([pages.PROFILE_PAGE]), {})
+        self.assertEqual(parser.extract_assignment_details([pages.BEHAVIOUR_PAGE]), {})
+
+    def test_enrichment_replaces_the_class_code_with_the_subject(self) -> None:
+        rows = parser.extract_section_rows([pages.DASHBOARD_WITH_SECTIONS])
+        assignments = parser.enrich_assignments(
+            parser.extract_assignments_from_sections(rows), self.details
+        )
+        task = next(item for item in assignments if item.title == "Term 1 - Task 1")
+        self.assertEqual(task.subject, "English Language KS4")
+        self.assertEqual(task.class_code, "9En4")
+        self.assertEqual(task.course, "English Language KS4: 9En4")
+        self.assertEqual(task.marking, "No mark")
+        self.assertEqual(task.submission_type, "Physical/Other")
+        self.assertIn("Metaphor", task.instructions or "")
+
+    def test_the_marking_scheme_is_not_reported_as_a_grade(self) -> None:
+        rows = parser.extract_section_rows([pages.DASHBOARD_WITH_SECTIONS])
+        assignments = parser.enrich_assignments(
+            parser.extract_assignments_from_sections(rows), self.details
+        )
+        # "No mark" and "Number" say how the work will be marked, not how it was.
+        self.assertTrue(all(item.grade is None for item in assignments))
+
+    def test_an_assignment_with_no_detail_page_keeps_its_class_code(self) -> None:
+        rows = parser.extract_section_rows([pages.DASHBOARD_WITH_SECTIONS])
+        assignments = parser.enrich_assignments(
+            parser.extract_assignments_from_sections(rows), self.details
+        )
+        flash = next(item for item in assignments if item.title == "Flash Cards")
+        self.assertEqual(flash.subject, "9Ma3")
+        self.assertIsNone(flash.course)
+
+    def test_a_date_is_found_inside_a_crowded_field(self) -> None:
+        self.assertEqual(
+            parser.find_date("Science KS4: 9Sc3, 25 Sep 2026"), date(2026, 9, 25)
+        )
+        self.assertEqual(parser.find_date("24 Sep 2026"), date(2026, 9, 24))
+        self.assertIsNone(parser.find_date("Science KS4: 9Sc3"))
+
+    def test_splits_a_course_into_subject_and_class(self) -> None:
+        self.assertEqual(
+            parser.split_course("English Language KS4: 9En4"), ("English Language KS4", "9En4")
+        )
+        self.assertEqual(parser.split_course("Open Evening"), ("Open Evening", None))
+
 
 if __name__ == "__main__":
     unittest.main()

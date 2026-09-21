@@ -253,19 +253,70 @@ the page named after it.** The dashboard's own links are the map.
 | --- | --- |
 | Attendance % | `/guardians/student/kpis/id/<id>/` — captioned "Attendance (2026/2027)", the number inside rendered HTML |
 | Behaviour totals | the same KPI list — "Positive/Negative/Neutral Behavioural Incidents - this term". Published as **incident counts**, not points |
-| Behaviour incidents | the behaviour page, as date-labelled property rows |
-| Assignments due | the **dashboard**, section "Assignments that are due": rows reading `9En4: Term 1 - Task 1 (Due 24 Sep 2026)` with the status alongside |
+| Behaviour incidents | the behaviour page, under "Positive/Negative/Neutral Incidents Breakdown" |
+| Assignments due | the subnav page "Assignments that are due" (and the dashboard): rows reading `9En4: Term 1 - Task 1 (Due 24 Sep 2026)` with the status alongside |
+| Assignment subject, marking and instructions | the link on each of those rows, `/guardians/student-ui/schoolwork-overview/schoolwork-id/<n>/student-id/<id>/…` |
 | Meal balance | the **dashboard**, section "Accounts": row description `Balance: £4.15` |
 | Timetable | `/guardians/widget-data/get-calendar-data/student-id/<id>/` — events with `start_datetime`, `end_datetime`, `title`, `location` |
 | The child's name | the caption of `/guardians/student-ui/overview/id/<id>` |
 
-Two traps in that list:
+Three traps in that list:
 
 - Both per-child endpoints must be fetched as **plain JSON**. Requesting either
   as a page, with `format=javascript`, returns a **500**.
 - The attendance *page* holds nothing but a "Log Absence" button, and the
-  assignments *page* holds only counts. Looking for the data where its name
-  suggests it should be wastes a lot of time.
+  assignments *landing* page holds only counts — its **subnav siblings** hold the
+  lists. Looking for the data where its name suggests it should be wastes a lot
+  of time.
+- A row's link is not decoration. Following it is the only way to the subject,
+  the marking scheme and the task itself.
+
+### Reading a property row
+
+`mis-property-row` is the workhorse of the guardian portal, and three separate
+things on it carry meaning:
+
+| Where | Holds |
+| --- | --- |
+| `props.fieldLabel` | the field name on a detail page (`Due`, `Course`, `Marking`), or the **date** on a behaviour incident |
+| `props.value` | the value — as HTML, which may itself be several labelled fields |
+| `props.description` | a status alongside, e.g. `Waiting for student to submit`, `Balance: £4.15` |
+
+A multi-field value is one `<div>` per field, each `<b>Label:</b> value`:
+
+```html
+<div><span class="mis-dark-orange"><b>Behaviour:</b> Motivation</span></div>
+<div><span class="mis-dark-orange"><b>Narrative:</b> Good work completed in lesson</span></div>
+<div><span class="mis-dark-orange"><b>Recorded by:</b> Mr Fuller</span></div>
+<div><span class="mis-dark-orange"><b>Event:</b> Maths KS4: 9Ma3</span></div>
+```
+
+Flattening that to text is lossy: an incident with no narrative emits
+`<b>Narrative:</b> ` and the empty value runs straight into the next label. The
+fields are read from the markup instead — `parser.parse_labelled_html`.
+
+### Two headings, not one
+
+`mis-subsection` contains the word "section", so a naive `"section" in xtype`
+check lets the inner heading overwrite the outer one. That loses the only thing
+that says whether an incident counts for or against the child:
+
+```
+mis-section    "Positive Incidents"          <- the polarity
+  mis-subsection "Positive Incidents"        <- three totals, labelled
+                                                Lifetime / 2026/2027 / Autumn
+  mis-subsection "Positive Incidents Breakdown"  <- one row per incident
+```
+
+Two consequences worth stating plainly:
+
+- **Each total appears three times, for different periods.** 129 positive
+  incidents and 35 positive incidents are both true on the same page. The
+  academic-year figure is the one the KPI panel shows, so that is the one a
+  sensor reports.
+- **Identical rows are not duplicates.** Two "Respect" incidents on the same day,
+  from the same teacher, in the same lesson are two incidents. Deduplicating
+  property rows by content undercounted a term by four.
 
 The calendar feed returns **today only**. A date range presumably narrows it, but
 that has not been established, so the timetable covers the current day.

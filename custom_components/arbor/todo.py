@@ -65,10 +65,13 @@ def _to_todo_item(assignment: Assignment) -> TodoItem:
     """Convert an assignment into a to-do item."""
     # Arbor does not expose a stable assignment id to guardians, so derive one
     # from the fields that identify the piece of work.
+    # The class code, not the subject: the subject's spelling depends on whether
+    # the assignment's own page was read this refresh, and a uid that changes
+    # with it would recreate every item.
     fingerprint = "|".join(
         [
             assignment.title,
-            assignment.subject or "",
+            assignment.class_code or "",
             assignment.due.isoformat() if assignment.due else "",
         ]
     )
@@ -78,13 +81,26 @@ def _to_todo_item(assignment: Assignment) -> TodoItem:
     if isinstance(due, datetime):
         due = due.date()
 
+    # The class code is only worth a line of its own when it says something the
+    # subject does not: "English Language KS4" plus "9En4", not "9En4" twice.
+    class_code = (
+        assignment.class_code
+        if assignment.class_code and assignment.class_code != assignment.subject
+        else None
+    )
     description_parts = [
         part
         for part in (
             f"Subject: {assignment.subject}" if assignment.subject else None,
+            f"Class: {class_code}" if class_code else None,
             f"Set by: {assignment.teacher}" if assignment.teacher else None,
             f"Status: {assignment.status}" if assignment.status else None,
+            f"Hand in: {assignment.submission_type}" if assignment.submission_type else None,
+            f"Marking: {assignment.marking}" if assignment.marking else None,
             f"Grade: {assignment.grade}" if assignment.grade else None,
+            # Last, and in full: this is the only place the task itself is
+            # readable, and a truncated instruction is worse than none.
+            f"\n{assignment.instructions}" if assignment.instructions else None,
         )
         if part
     ]

@@ -55,9 +55,9 @@ Per child:
 | --- | --- | --- |
 | *(the child)* | sensor | Named after the child, e.g. `sensor.amelia_example`. State is their name; **every** detail below is on it as an attribute |
 | Attendance | sensor (%) | Attributes: present sessions, authorised/unauthorised absences, lates |
-| Behaviour points | sensor | Net points. Attributes: positive, negative, recent incidents |
+| Behaviour points | sensor | Net points. Attributes: every incident with its date, type, subject, teacher and comment, plus counts by subject, by type and by teacher |
 | Positive points / Negative points | sensor | The two sides on their own, for graphing |
-| Assignments outstanding | sensor | Attributes: the full list with subject, due date, status |
+| Assignments outstanding | sensor | Attributes: the full list with title, subject, class, due date, status, marking, how to hand it in and the teacher's instructions |
 | Assignments overdue | sensor | Outstanding work whose deadline has passed |
 | Next lesson | sensor | Subject. Attributes: start, end, room, teacher, lessons today |
 | Meal balance | sensor (£) | Attributes: every account Arbor shows |
@@ -97,6 +97,61 @@ Use the individual sensors for anything you want to **graph or trigger on** —
 attributes are not kept in history, and the list-valued ones are explicitly
 excluded from the recorder so they do not bloat your database.
 
+### What each assignment and behaviour point actually says
+
+Arbor's lists are terse — `9En4: Term 1 - Task 1 (Due 24 Sep 2026)` — and the
+subject, the marking scheme and the task itself are on the piece of work's own
+page. The integration follows those links, so each assignment carries:
+
+| | |
+| --- | --- |
+| `title` | "Term 1 - Task 1" |
+| `subject` / `class` | "English Language KS4" / "9En4" |
+| `due` | 2026-09-24 |
+| `status` | "Waiting for student to submit" |
+| `marking` | "No mark", "Number" — how it *will* be marked, which is not a grade |
+| `submission_type` | "Submit via Arbor", "Physical/Other" |
+| `instructions` | what the teacher actually set |
+
+The **to-do list** carries the instructions in full; the sensor attribute holds
+the first 500 characters, so a dashboard card does not put kilobytes of prose in
+the state machine.
+
+Behaviour is the mirror image — the totals are counts, and the page lists what is
+behind them:
+
+```yaml
+type: markdown
+content: >-
+  {% for i in state_attr('sensor.amelia_behaviour_points', 'recent_incidents')[:5] %}
+  {{ i.date }} — **{{ i.type }}** in {{ i.subject or i.event }} ({{ i.staff }})
+  {{ '· ' ~ i.comment if i.comment }}
+  {% endfor %}
+```
+
+`by_subject`, `by_type` and `by_staff` give the same record grouped, which is
+usually the question being asked:
+
+```jinja
+{{ state_attr('sensor.amelia_behaviour_points', 'by_subject') }}
+{# {'Maths KS4': 14, 'Film KS4': 7, 'Geography KS4': 3, ...} #}
+```
+
+Not every school publishes *points*. Several publish behaviour **types** —
+"Motivation", "Respect" — and count incidents instead. Where that is the case
+`points` is `null` on each incident rather than a number made up from the text,
+and the sensor's value is the school's own headline count.
+
+`totals_by_period` carries the several totals Arbor states at once:
+
+```jinja
+{{ state_attr('sensor.amelia_behaviour_points', 'totals_by_period') }}
+{# {'positive': {'Lifetime': 129, '2026/2027': 35, 'Autumn': 35}, ...} #}
+```
+
+The sensor's own value is the **academic year**, which is what the portal's
+headline shows. The lifetime figure is the larger, and usually not the one meant.
+
 ### Siblings
 
 Arbor's dashboard and calendar feeds show whichever child is currently selected,
@@ -128,6 +183,31 @@ automation:
             {{ states('sensor.amelia_assignments_overdue') }} assignment(s) overdue:
             {{ state_attr('sensor.amelia_assignments_overdue', 'assignments')
                | map(attribute='title') | join(', ') }}
+```
+
+Say what is due tomorrow, with the subject:
+
+```yaml
+automation:
+  - alias: Homework due tomorrow
+    triggers:
+      - trigger: time
+        at: "18:30:00"
+    actions:
+      - variables:
+          due: >-
+            {{ state_attr('sensor.amelia_assignments_outstanding', 'assignments')
+               | selectattr('due')
+               | selectattr('due', 'search', (now() + timedelta(days=1)).strftime('%Y-%m-%d'))
+               | list }}
+      - condition: template
+        value_template: "{{ due | count > 0 }}"
+      - action: notify.family
+        data:
+          title: Due tomorrow
+          message: >-
+            {% for a in due %}{{ a.subject }}: {{ a.title }}
+            {% endfor %}
 ```
 
 Top up the meal account before it runs dry:

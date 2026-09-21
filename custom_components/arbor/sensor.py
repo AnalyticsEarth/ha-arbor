@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -26,8 +27,16 @@ from .models import Assignment, BehaviourIncident, Lesson, StudentData
 _LOGGER = logging.getLogger(__name__)
 
 # How many list items to publish as attributes. Home Assistant stores attributes
-# in the state machine and recorder, so an unbounded list is a real cost.
-MAX_LIST_ATTRIBUTES = 25
+# in the state machine and recorder, so an unbounded list is a real cost. A term
+# of behaviour incidents runs to a few dozen, so the cap has to clear that to be
+# of any use for a whole school year.
+MAX_LIST_ATTRIBUTES = 60
+
+# Assignment instructions run to whole paragraphs. The full text goes on the
+# to-do item, where a parent actually reads it; an attribute carries an excerpt
+# so a dashboard card can show what the work is without holding kilobytes of
+# prose in the state machine.
+MAX_TEXT_ATTRIBUTE = 500
 
 
 def _iso(value: datetime | date | None) -> str | None:
@@ -35,16 +44,29 @@ def _iso(value: datetime | date | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _clip(text: str | None) -> str | None:
+    """Shorten a long free-text field for an attribute."""
+    if text is None or len(text) <= MAX_TEXT_ATTRIBUTE:
+        return text
+    return f"{text[: MAX_TEXT_ATTRIBUTE - 1]}…"
+
+
 def _assignment_attrs(items: list[Assignment]) -> list[dict[str, Any]]:
     return [
         {
             "title": item.title,
             "subject": item.subject,
+            "class": item.class_code,
+            "course": item.course,
             "due": _iso(item.due),
             "status": item.status,
+            "marking": item.marking,
+            "submission_type": item.submission_type,
+            "instructions": _clip(item.instructions),
             "grade": item.grade,
             "teacher": item.teacher,
             "overdue": item.is_overdue,
+            "url": item.url,
         }
         for item in items[:MAX_LIST_ATTRIBUTES]
     ]
@@ -57,12 +79,44 @@ def _incident_attrs(items: list[BehaviourIncident]) -> list[dict[str, Any]]:
             "type": item.kind,
             "points": item.points,
             "subject": item.subject,
+            "class": item.class_code,
+            "event": item.event,
             "staff": item.staff,
             "comment": item.comment,
+            "polarity": item.polarity,
             "positive": item.is_positive,
         }
         for item in items[:MAX_LIST_ATTRIBUTES]
     ]
+
+
+def _count_by(items: list[BehaviourIncident], attribute: str) -> dict[str, int]:
+    """Incidents grouped by one of their fields, most frequent first.
+
+    This is the question a parent actually asks -- which subjects the points came
+    from -- and it is not answerable from a running total.
+    """
+    counts = Counter(getattr(item, attribute) or "(not stated)" for item in items)
+    return dict(counts.most_common())
+
+
+def _behaviour_attrs(student: StudentData) -> dict[str, Any]:
+    """The behaviour record, broken down the ways it gets asked about."""
+    incidents = student.behaviour_incidents
+    return {
+        "positive_points": student.behaviour_points_positive,
+        "negative_points": student.behaviour_points_negative,
+        "incident_count": len(incidents),
+        "positive_incidents": sum(1 for item in incidents if item.is_positive),
+        "negative_incidents": sum(1 for item in incidents if item.is_negative),
+        "by_subject": _count_by(incidents, "subject"),
+        "by_type": _count_by(incidents, "kind"),
+        "by_staff": _count_by(incidents, "staff"),
+        # Arbor states each total for the child's lifetime, the academic year and
+        # the current term, which is how 129 and 35 are both true.
+        "totals_by_period": student.behaviour_totals,
+        "recent_incidents": _incident_attrs(incidents),
+    }
 
 
 def _lesson_attrs(items: list[Lesson]) -> list[dict[str, Any]]:
@@ -170,6 +224,9 @@ def _summary_attrs(student: StudentData) -> dict[str, Any]:
         "positive_points": student.behaviour_points_positive,
         "negative_points": student.behaviour_points_negative,
         "behaviour_incidents": _incident_attrs(student.behaviour_incidents),
+        "behaviour_by_subject": _count_by(student.behaviour_incidents, "subject"),
+        "behaviour_by_type": _count_by(student.behaviour_incidents, "kind"),
+        "behaviour_totals_by_period": student.behaviour_totals,
         "assignments_total": len(student.assignments),
         "assignments_outstanding": len(student.outstanding_assignments),
         "assignments_overdue": len(student.overdue_assignments),
@@ -233,12 +290,7 @@ SENSORS: tuple[ArborSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:scale-balance",
         value_fn=lambda student: student.behaviour_points_net,
-        attributes_fn=lambda student: {
-            "positive_points": student.behaviour_points_positive,
-            "negative_points": student.behaviour_points_negative,
-            "incident_count": len(student.behaviour_incidents),
-            "recent_incidents": _incident_attrs(student.behaviour_incidents),
-        },
+        attributes_fn=_behaviour_attrs,
     ),
     ArborSensorDescription(
         key="positive_points",
@@ -351,11 +403,18 @@ class ArborSensor(ArborStudentEntity, SensorEntity):
             "accounts",
             "assignments",
             "attendance",
+            "behaviour_by_subject",
+            "behaviour_by_type",
             "behaviour_incidents",
+            "behaviour_totals_by_period",
+            "by_staff",
+            "by_subject",
+            "by_type",
             "grades",
             "lessons",
             "notices",
             "recent_incidents",
+            "totals_by_period",
             "upcoming",
         }
     )

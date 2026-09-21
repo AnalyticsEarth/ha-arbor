@@ -52,6 +52,18 @@ async def async_get_config_entry_diagnostics(
                     "name_looks_like_a_person": not student.name.startswith("Student "),
                     "attendance_percentage_found": student.attendance.percentage is not None,
                     "behaviour_points_found": student.behaviour_points_net is not None,
+                    # Whether the detail behind each figure was reached, which
+                    # is the difference between a useful entity and a count.
+                    "assignments_with_a_named_subject": sum(
+                        1 for item in student.assignments if item.course
+                    ),
+                    "incidents_with_a_polarity": sum(
+                        1 for item in student.behaviour_incidents if item.polarity
+                    ),
+                    "behaviour_periods": {
+                        polarity: sorted(periods)
+                        for polarity, periods in student.behaviour_totals.items()
+                    },
                     "counts": {
                         "assignments": len(student.assignments),
                         "behaviour_incidents": len(student.behaviour_incidents),

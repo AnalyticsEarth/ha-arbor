@@ -74,6 +74,29 @@ class TestBehaviourIncident(unittest.TestCase):
         )
         self.assertFalse(models.BehaviourIncident(occurred=None).is_positive)
 
+    def test_the_schools_own_heading_beats_both(self) -> None:
+        """A school names a behaviour type however it likes.
+
+        "Disruption" is in no keyword list and carries no points; the section it
+        was listed under is the only thing that says it counts against the child.
+        """
+        incident = models.BehaviourIncident(
+            occurred=None, kind="Disruption", polarity="negative"
+        )
+        self.assertFalse(incident.is_positive)
+        self.assertTrue(incident.is_negative)
+
+    def test_neutral_is_neither(self) -> None:
+        # Counting a neutral incident against a child misreports their record.
+        incident = models.BehaviourIncident(
+            occurred=None, kind="Left lesson early", polarity="neutral"
+        )
+        self.assertFalse(incident.is_positive)
+        self.assertFalse(incident.is_negative)
+
+    def test_an_unclassified_incident_is_neither(self) -> None:
+        self.assertFalse(models.BehaviourIncident(occurred=None, kind="Motivation").is_negative)
+
 
 class TestStudentData(unittest.TestCase):
     """Aggregates the entities read."""

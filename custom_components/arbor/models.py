@@ -37,12 +37,25 @@ class Assignment:
     """A piece of homework or coursework."""
 
     title: str
+    #: The subject as the school names it: "English Language KS4". Arbor's list
+    #: of work shows only the class code, so this falls back to that.
     subject: str | None = None
     due: datetime | date | None = None
     status: str | None = None
     grade: str | None = None
     teacher: str | None = None
     url: str | None = None
+    #: Subject and class together, as the assignment's own page states it:
+    #: "English Language KS4: 9En4".
+    course: str | None = None
+    #: The teaching group the work was set for: "9En4".
+    class_code: str | None = None
+    #: How the work will be marked ("No mark", "Number") -- not a grade.
+    marking: str | None = None
+    #: How it is to be handed in ("Submit via Arbor", "Physical/Other").
+    submission_type: str | None = None
+    #: The teacher's instructions to the student, in full.
+    instructions: str | None = None
 
     @property
     def is_submitted(self) -> bool:
@@ -70,21 +83,50 @@ class BehaviourIncident:
     """A single logged positive or negative behaviour event."""
 
     occurred: datetime | date | None
+    #: What the school logged: "Motivation", "Respect", "Weekly 100% attendance".
     kind: str | None = None
     points: float | None = None
+    #: The subject the incident was logged in: "Maths KS4".
     subject: str | None = None
     staff: str | None = None
     comment: str | None = None
+    #: "positive", "negative" or "neutral", when the school's own page groups
+    #: incidents under those headings. More reliable than guessing from wording.
+    polarity: str | None = None
+    #: What the incident was attached to, in full: "Maths KS4: 9Ma3", or a
+    #: one-off like "Open Evening Tour Guides and Department Helpers".
+    event: str | None = None
+    #: The teaching group, when the event names one: "9Ma3".
+    class_code: str | None = None
 
     @property
     def is_positive(self) -> bool:
         """Whether this reads as a positive event."""
+        if self.polarity is not None:
+            return self.polarity == "positive"
         if self.points is not None:
             return self.points >= 0
         lowered = (self.kind or "").casefold()
         return any(
             token in lowered
             for token in ("positive", "achievement", "praise", "merit", "reward", "house point")
+        )
+
+    @property
+    def is_negative(self) -> bool:
+        """Whether this reads as a negative event.
+
+        Not simply ``not is_positive``: a school can log a neutral incident, and
+        counting those against a child would misreport their record.
+        """
+        if self.polarity is not None:
+            return self.polarity == "negative"
+        if self.points is not None:
+            return self.points < 0
+        lowered = (self.kind or "").casefold()
+        return any(
+            token in lowered
+            for token in ("negative", "concern", "sanction", "detention", "demerit")
         )
 
 
@@ -169,6 +211,9 @@ class StudentData:
     behaviour_points_positive: float | None = None
     behaviour_points_negative: float | None = None
     behaviour_incidents: list[BehaviourIncident] = field(default_factory=list)
+    #: Incident counts by polarity and then period, as the behaviour page states
+    #: them: ``{"positive": {"Lifetime": 129, "2026/2027": 35, "Autumn": 35}}``.
+    behaviour_totals: dict[str, dict[str, float]] = field(default_factory=dict)
     assignments: list[Assignment] = field(default_factory=list)
     lessons: list[Lesson] = field(default_factory=list)
     grades: list[Grade] = field(default_factory=list)

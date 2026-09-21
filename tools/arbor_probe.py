@@ -617,6 +617,9 @@ def report(data: Any, show_values: bool) -> None:
             f"  negative {_or_dash(student.behaviour_points_negative)}"
             f"  incidents {len(student.behaviour_incidents)}"
         )
+        for polarity, periods in student.behaviour_totals.items():
+            spans = "  ".join(f"{period} {count:g}" for period, count in periods.items())
+            print(f"     {polarity:<9} {spans}")
         print(
             f"   assignments       {len(student.assignments)} total,"
             f" {len(student.outstanding_assignments)} outstanding,"
@@ -652,25 +655,65 @@ def report(data: Any, show_values: bool) -> None:
 
 
 def _print_samples(student: Any) -> None:
-    """Show a couple of real rows, to confirm the parse is actually right."""
+    """Show the real rows, to confirm the parse is actually right."""
     if student.assignments:
-        print("   sample assignments:")
-        for item in student.assignments[:3]:
+        print("   assignments:")
+        for item in student.assignments:
+            due = item.due.date() if hasattr(item.due, "date") else item.due
+            print(f"     · {item.title}")
             print(
-                f"     · {item.title!r} subject={item.subject!r} due={item.due} "
-                f"status={item.status!r} grade={item.grade!r}"
+                f"         subject {item.subject or '-'}"
+                f"   class {item.class_code or '-'}"
+                f"   due {due or '-'}"
             )
+            print(
+                f"         status {item.status or '-'}"
+                f"   marking {item.marking or '-'}"
+                f"   hand in {item.submission_type or '-'}"
+            )
+            if item.instructions:
+                print(f"         task: {_clip(item.instructions, 110)}")
     if student.behaviour_incidents:
-        print("   sample behaviour:")
-        for item in student.behaviour_incidents[:3]:
+        print("   behaviour incidents:")
+        for item in student.behaviour_incidents:
             print(
-                f"     · {item.occurred} {item.kind!r} points={item.points} "
-                f"subject={item.subject!r}"
+                f"     · {item.occurred}  {item.polarity or '?':<8} {item.kind or '-'}"
+                f"  [{item.event or 'no event'}]"
+                f"{f'  {item.points:+g} pts' if item.points is not None else ''}"
             )
+            details = [
+                part
+                for part in (
+                    f"by {item.staff}" if item.staff else None,
+                    f'"{_clip(item.comment, 90)}"' if item.comment else None,
+                )
+                if part
+            ]
+            if details:
+                print(f"         {'  '.join(details)}")
+        _print_behaviour_breakdown(student)
     if student.lessons:
         print("   sample lessons:")
         for item in student.lessons[:4]:
             print(f"     · {item.summary!r} {item.start} -> {item.end} at {item.location!r}")
+
+
+def _print_behaviour_breakdown(student: Any) -> None:
+    """Group the incidents the way a parent would ask about them."""
+    from collections import Counter
+
+    for title, key in (("by subject", "subject"), ("by type", "kind")):
+        counts = Counter(
+            getattr(item, key) or "(not stated)" for item in student.behaviour_incidents
+        )
+        print(f"   behaviour {title}:")
+        for name, count in counts.most_common():
+            print(f"     · {name}: {count}")
+
+
+def _clip(text: str, limit: int) -> str:
+    """Shorten *text* for one line of terminal output."""
+    return text if len(text) <= limit else f"{text[: limit - 1]}…"
 
 
 def _or_dash(value: Any, suffix: str = "") -> str:

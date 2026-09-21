@@ -404,5 +404,89 @@ class TestWrothamShapedPortal(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ambiguous, [])
 
 
+class TestAssignmentAndBehaviourDetail(unittest.IsolatedAsyncioTestCase):
+    """The detail a parent actually asks for, end to end.
+
+    Every list of work Arbor shows a guardian carries a class code and a
+    deadline; the subject, the marking scheme and the task itself are only on the
+    piece of work's own page, which the list links to. Behaviour is the mirror
+    image: the page lists each incident with its type, lesson and teacher, and
+    publishes no points at all.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.portal = FakePortal(
+            {
+                "/guardians/home-ui/dashboard": pages.SINGLE_CHILD_DASHBOARD,
+                "/guardians/student-profile/index/student-id/40219": pages.PROFILE_PAGE,
+                "/guardians/assignments/index/student-id/40219": (
+                    pages.ASSIGNMENTS_DUE_SECTION
+                ),
+                "/guardians/student-ui/schoolwork-overview/schoolwork-id/1708": (
+                    pages.ASSIGNMENT_DETAIL_PAGE
+                ),
+                "/guardians/student-ui/schoolwork-overview/schoolwork-id/1961": (
+                    pages.ASSIGNMENT_DETAIL_COURSE_IN_DUE
+                ),
+                "/guardians/behaviour/index/student-id/40219": (
+                    pages.BEHAVIOUR_INCIDENT_BREAKDOWN
+                ),
+                "/auth/current-user-settings/format/json": pages.CURRENT_USER_SETTINGS,
+            }
+        )
+        self.scraper = scraper_module.ArborScraper(self.portal.fetch, self.portal.fetch)
+        self.data = await self.scraper.async_scrape()
+        self.student = self.data.students["40219"]
+
+    def test_every_assignment_is_named_with_its_deadline(self) -> None:
+        by_title = {item.title: item for item in self.student.assignments}
+        self.assertEqual(
+            set(by_title), {"Term 1 - Task 1", "Cell biology", "Stage evaluation"}
+        )
+        self.assertEqual(by_title["Term 1 - Task 1"].due, datetime(2026, 9, 24))
+
+    def test_the_subject_is_read_from_the_work_s_own_page(self) -> None:
+        task = next(
+            item for item in self.student.assignments if item.title == "Term 1 - Task 1"
+        )
+        self.assertEqual(task.subject, "English Language KS4")
+        self.assertEqual(task.class_code, "9En4")
+        self.assertEqual(task.submission_type, "Physical/Other")
+        self.assertIn("Metaphor", task.instructions or "")
+
+    def test_an_unlinked_assignment_keeps_the_class_code_as_its_subject(self) -> None:
+        # Better than nothing, and honest about what the page said.
+        submitted = next(
+            item for item in self.student.assignments if item.title == "Stage evaluation"
+        )
+        self.assertEqual(submitted.subject, "9D/Dr")
+        self.assertTrue(submitted.is_submitted)
+
+    def test_each_behaviour_incident_names_its_subject_and_teacher(self) -> None:
+        self.assertEqual(len(self.student.behaviour_incidents), 5)
+        latest = self.student.behaviour_incidents[0]
+        self.assertEqual(latest.kind, "Motivation")
+        self.assertEqual(latest.subject, "Maths KS4")
+        self.assertEqual(latest.staff, "Mr Fuller")
+        self.assertEqual(latest.polarity, "positive")
+
+    def test_behaviour_totals_say_which_period_they_cover(self) -> None:
+        self.assertEqual(self.student.behaviour_totals["positive"]["Autumn"], 35.0)
+        self.assertEqual(self.student.behaviour_totals["positive"]["Lifetime"], 129.0)
+
+    def test_behaviour_counts_as_sourced_without_a_kpi_endpoint(self) -> None:
+        self.assertIn("behaviour", self.student.sourced_domains)
+
+    def test_the_headline_is_the_year_not_the_lifetime(self) -> None:
+        """A school with no KPI panel still gets a number, and the right one.
+
+        Reading the first total on the page would report 129 where the portal
+        itself shows 35.
+        """
+        self.assertEqual(self.student.behaviour_points_positive, 35.0)
+        self.assertEqual(self.student.behaviour_points_negative, 1.0)
+        self.assertEqual(self.student.behaviour_points_net, 34.0)
+
+
 if __name__ == "__main__":
     unittest.main()

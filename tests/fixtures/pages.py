@@ -886,3 +886,235 @@ DASHBOARD_WITH_SECTIONS = {
         }
     ],
 }
+
+
+def _incident_row(date_label: str, value: str) -> dict:
+    """One behaviour breakdown row, as Arbor emits it."""
+    return {"xtype": "mis-property-row", "props": {"fieldLabel": date_label, "value": value}}
+
+
+def _incident_value(
+    behaviour: str, narrative: str, staff: str, event: str
+) -> str:
+    """The HTML Arbor puts in a breakdown row: one <div> per labelled field."""
+    return "".join(
+        f'<div><span class="mis-dark-orange"><b>{label}:</b> {text}</span></div>'
+        for label, text in (
+            ("Behaviour", behaviour),
+            ("Narrative", narrative),
+            ("Recorded by", staff),
+            ("Event", event),
+        )
+    )
+
+
+def _incident_totals(polarity: str, lifetime: int, year: int, term: int) -> dict:
+    """The three summary rows Arbor states every total in."""
+    return {
+        "xtype": "mis-subsection",
+        "props": {"title": f"{polarity.title()} Incidents"},
+        "content": [
+            {
+                "xtype": "mis-property-row",
+                "props": {"fieldLabel": label, "value": f"{count} {polarity} incidents"},
+            }
+            for label, count in (("Lifetime", lifetime), ("2026/2027", year), ("Autumn", term))
+        ],
+    }
+
+
+# The behaviour page as Wrotham School serves it: each polarity is a section
+# holding a totals subsection and a breakdown subsection, and only the section
+# heading says whether the incidents below it count for or against the child.
+BEHAVIOUR_INCIDENT_BREAKDOWN = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "mis-layoutcolumn",
+            "content": [
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Positive Incidents"},
+                    "content": [
+                        _incident_totals("positive", 129, 35, 35),
+                        {
+                            "xtype": "mis-subsection",
+                            "props": {"title": "Positive Incidents Breakdown"},
+                            "content": [
+                                _incident_row(
+                                    "21 Sep 2026",
+                                    _incident_value(
+                                        "Motivation",
+                                        "Good work completed in lesson",
+                                        "Mr Fuller",
+                                        "Maths KS4: 9Ma3",
+                                    ),
+                                ),
+                                # Two identical incidents on one day. Collapsing
+                                # these as duplicates undercounted a term.
+                                _incident_row(
+                                    "18 Sep 2026",
+                                    _incident_value("Respect", "", "Mr Burton", "Maths KS4: 9Ma3"),
+                                ),
+                                _incident_row(
+                                    "18 Sep 2026",
+                                    _incident_value("Respect", "", "Mr Burton", "Maths KS4: 9Ma3"),
+                                ),
+                                # An incident attached to something that is not a
+                                # lesson, so there is no subject to report.
+                                _incident_row(
+                                    "10 Sep 2026",
+                                    _incident_value(
+                                        "Communication",
+                                        "",
+                                        "Miss Flannery",
+                                        "Open Evening Tour Guides",
+                                    ),
+                                ),
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Negative Incidents"},
+                    "content": [
+                        _incident_totals("negative", 4, 1, 1),
+                        {
+                            "xtype": "mis-subsection",
+                            "props": {"title": "Negative Incidents Breakdown"},
+                            "content": [
+                                _incident_row(
+                                    "15 Sep 2026",
+                                    _incident_value(
+                                        "Disruption",
+                                        "Talking over the class, 2 points",
+                                        "Ms Robinson",
+                                        "Geography KS4: 9C/Gg",
+                                    ),
+                                )
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Neutral Incidents"},
+                    "content": [_incident_totals("neutral", 2, 0, 0)],
+                },
+            ],
+        }
+    ],
+}
+
+
+def _detail_row(label: str, value: str) -> dict:
+    return {"xtype": "mis-property-row", "props": {"fieldLabel": label, "value": value}}
+
+
+# An assignment's own page, reached from the "(Due ...)" row's link. This is the
+# only place the subject is named rather than abbreviated to a class code.
+ASSIGNMENT_DETAIL_PAGE = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "mis-layoutcolumn",
+            "content": [
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Term 1 - Task 1"},
+                    "content": [
+                        _detail_row("Title", "Term 1 - Task 1"),
+                        _detail_row("Due", "24 Sep 2026"),
+                        _detail_row("Course", "English Language KS4: 9En4"),
+                        _detail_row("Marking", "No mark"),
+                        _detail_row("Status", "Waiting for student to submit"),
+                        _detail_row("Submission Type", "Physical/Other"),
+                    ],
+                },
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Student Instructions"},
+                    "content": [
+                        _detail_row(
+                            "Instructions",
+                            "Learn the spelling and definition of the following words: "
+                            "Perspective, Metaphor, Personification.",
+                        )
+                    ],
+                },
+            ],
+        }
+    ],
+}
+
+# The same page for a school that crams the course into the Due field, which is
+# what Arbor does when the assignment is submitted through the portal.
+ASSIGNMENT_DETAIL_COURSE_IN_DUE = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "mis-section",
+            "props": {"title": "Cell biology"},
+            "content": [
+                _detail_row("Title", "Cell biology"),
+                _detail_row("Due", "Science KS4: 9Sc3, 25 Sep 2026"),
+                _detail_row("Course", "Science KS4: 9Sc3"),
+                _detail_row("Marking", "Number"),
+                _detail_row("Status", "Waiting for student to submit"),
+                _detail_row("Submission Type", "Submit via Arbor"),
+            ],
+        }
+    ],
+}
+
+
+# The assignments page as Wrotham serves it: a list of rows, each linking to the
+# piece of work's own page. Nothing here names a subject.
+ASSIGNMENTS_DUE_SECTION = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "mis-layoutcolumn",
+            "content": [
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Assignments that are due"},
+                    "content": [
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "value": "9En4: Term 1 - Task 1 (Due 24 Sep 2026)",
+                                "description": "Waiting for student to submit",
+                                "url": "/guardians/student-ui/schoolwork-overview"
+                                "/schoolwork-id/1708/student-id/40219",
+                            },
+                        },
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "value": "9Sc3: Cell biology (Due 25 Sep 2026)",
+                                "description": "Waiting for student to submit",
+                                "url": "/guardians/student-ui/schoolwork-overview"
+                                "/schoolwork-id/1961/student-id/40219",
+                            },
+                        },
+                    ],
+                },
+                {
+                    "xtype": "mis-section",
+                    "props": {"title": "Submitted Assignments"},
+                    "content": [
+                        {
+                            "xtype": "mis-property-row",
+                            "props": {
+                                "value": "9D/Dr: Stage evaluation (Due 14 Sep 2026)",
+                                "description": "Submitted",
+                            },
+                        }
+                    ],
+                },
+            ],
+        }
+    ],
+}

@@ -49,30 +49,6 @@ _LABEL_KEYS = (
 # Keys that hold a component's value.
 _VALUE_KEYS = ("value", "displayValue", "html", "content", "subtitle", "description")
 
-# Keys under which a component nests its children.
-_CHILD_KEYS = (
-    "items",
-    "children",
-    "rows",
-    "data",
-    "records",
-    "panels",
-    "sections",
-    "tabs",
-    "columns",
-    "fields",
-    "body",
-    "content",
-    "widgets",
-    "tiles",
-    "cards",
-    "entries",
-    "events",
-    "store",
-    "config",
-    "props",
-)
-
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _MAX_DEPTH = 40

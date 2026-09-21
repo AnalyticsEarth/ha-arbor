@@ -88,6 +88,7 @@ ArborAuthError = errors.ArborAuthError
 ArborConnectionError = errors.ArborConnectionError
 ArborError = errors.ArborError
 ArborNotAvailableError = errors.ArborNotAvailableError
+ArborConfigurationError = errors.ArborConfigurationError
 
 RESPONSE_NOT_AVAILABLE = http_util.RESPONSE_NOT_AVAILABLE
 RESPONSE_SERVER_ERROR = http_util.RESPONSE_SERVER_ERROR
@@ -192,11 +193,11 @@ class UrllibArborClient:
                 print(f"school:   {matches[0].label}", file=sys.stderr)
                 return matches[0].base_url
             if not matches:
-                raise ArborError(
+                raise ArborConfigurationError(
                     f"No school matches {self._school_selector!r}.\n\n"
                     + _school_listing(schools)
                 )
-            raise ArborError(
+            raise ArborConfigurationError(
                 f"{self._school_selector!r} matches {len(matches)} schools.\n\n"
                 + _school_listing(matches)
             )
@@ -205,7 +206,7 @@ class UrllibArborClient:
             print(f"school:   {schools[0].label}", file=sys.stderr)
             return schools[0].base_url
 
-        raise ArborError(
+        raise ArborConfigurationError(
             f"This account covers {len(schools)} schools, so pick one:\n\n"
             + _school_listing(schools)
             + "\n\nA name fragment works too, e.g. --school wrotham.\n"
@@ -306,7 +307,7 @@ class UrllibArborClient:
         if not self._logged_in:
             self.login()
         if self._base_url is None:
-            raise ArborError("No Arbor school selected")
+            raise ArborConfigurationError("No Arbor school selected")
         return self._base_url
 
 
@@ -621,6 +622,9 @@ def main(argv: list[str] | None = None) -> int:
     client = UrllibArborClient(args.email, password, args.school)
     try:
         return asyncio.run(COMMANDS[args.command](client, args))
+    except ArborConfigurationError as err:
+        print(f"\n{err}", file=sys.stderr)
+        return 2
     except ArborAuthError as err:
         print(f"\nauthentication failed: {err}", file=sys.stderr)
         return 3

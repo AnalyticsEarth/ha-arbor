@@ -20,6 +20,7 @@ from . import protocol
 from .const import AUTH_LOGOUT_PATH, FORMAT_JAVASCRIPT
 from .errors import (
     ArborAuthError,
+    ArborConfigurationError,
     ArborConnectionError,
     ArborError,
     ArborNoSchoolsError,
@@ -130,7 +131,7 @@ class ArborClient:
         if self._base_url is None:
             schools = await self.async_list_schools()
             if len(schools) > 1:
-                raise ArborError(
+                raise ArborConfigurationError(
                     "This account has more than one Arbor school; pick one during setup"
                 )
             self._base_url = schools[0].base_url
@@ -191,13 +192,13 @@ class ArborClient:
     def page_url(self, path: str) -> str:
         """Build the JSON URL for a portal page path such as ``/guardians/...``."""
         if self._base_url is None:
-            raise ArborError("No Arbor school selected yet")
+            raise ArborConfigurationError("No Arbor school selected yet")
         return build_page_url(self._base_url, path, FORMAT_JAVASCRIPT)
 
     def endpoint_url(self, path: str) -> str:
         """Build the URL for a direct ``/format/json`` style endpoint."""
         if self._base_url is None:
-            raise ArborError("No Arbor school selected yet")
+            raise ArborConfigurationError("No Arbor school selected yet")
         route = path if path.startswith("/") else f"/{path}"
         return f"{self._base_url}{route}"
 
@@ -216,7 +217,7 @@ class ArborClient:
         in a scraped page can never redirect us off the school's own domain.
         """
         if self._base_url is None:
-            raise ArborError("No Arbor school selected yet")
+            raise ArborConfigurationError("No Arbor school selected yet")
         candidate = strip_route_prefix(url.strip())
         if candidate.startswith("//"):
             # Protocol-relative: not ours, and not a portal route either.

@@ -35,6 +35,16 @@ class ArborNotAvailableError(ArborError):
     """
 
 
+class ArborConfigurationError(ArborError):
+    """The client is not set up well enough to make the request.
+
+    No school chosen, several schools to choose between, and similar. Never a
+    per-page condition, so the tolerant fetch helpers must let it through rather
+    than reporting it as "this page is unavailable" -- which is how a script
+    stopped at the school picker came out as "could not read the dashboard".
+    """
+
+
 class ArborAuthError(ArborError):
     """Arbor rejected the credentials themselves.
 

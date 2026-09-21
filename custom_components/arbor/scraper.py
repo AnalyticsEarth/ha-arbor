@@ -15,7 +15,12 @@ from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from typing import Any
 
-from .errors import ArborAuthError, ArborError, ArborNotAvailableError
+from .errors import (
+    ArborAuthError,
+    ArborConfigurationError,
+    ArborError,
+    ArborNotAvailableError,
+)
 from .const import (
     ALL_DATA_DOMAINS,
     CALENDAR_DATA_PATH,
@@ -210,7 +215,7 @@ class ArborScraper:
                 continue
             try:
                 tree = await self._fetch_page(path)
-            except ArborAuthError:
+            except (ArborAuthError, ArborConfigurationError):
                 raise
             except ArborNotAvailableError as err:
                 self._unavailable.add(key)
@@ -398,61 +403,15 @@ class ArborScraper:
     async def _try(self, path: str, fetch: Any, label: str) -> Any | None:
         """Fetch something optional, remembering what Arbor refuses.
 
-        Only :class:`ArborAuthError` escapes, and after the login rework that can
-        only come from the login handshake itself -- so a single forbidden
-        endpoint can no longer take the whole integration down.
+        A forbidden endpoint cannot take a whole scrape down. A bad password or a
+        client that is not configured still must, so those two are re-raised.
         """
         key = _endpoint_key(path)
         if key in self._unavailable:
             return None
         try:
             return await fetch(path)
-        except ArborAuthError:
-            raise
-        except ArborNotAvailableError as err:
-            self._log.debug("Arbor does not offer %s %s: %s", label, path, err)
-            self._unavailable.add(key)
-            return None
-        except ArborError as err:
-            # Transient: worth trying again on the next refresh.
-            self._log.debug("Skipping Arbor %s %s: %s", label, path, err)
-            return None
-
-    async def _try_page(self, path: str) -> Any | None:
-        """Fetch a portal page, returning None when it is unavailable."""
-        return await self._try(path, self.client.async_fetch_absolute, "page")
-
-    async def _try_json(self, path: str) -> Any | None:
-        """Fetch a JSON endpoint, returning None when it is unavailable."""
-        return await self._try(path, self.client.async_fetch_json, "endpoint")
-
-
-    # -- tolerant fetch helpers ---------------------------------------------
-
-    def _forget_stale_refusals(self) -> None:
-        """Re-probe refused endpoints once a day.
-
-        A school can switch a portal feature on at any time, so a refusal is
-        remembered to save requests, not treated as permanent.
-        """
-        today = date.today()
-        if self._unavailable_day != today:
-            self._unavailable.clear()
-            self._unavailable_day = today
-
-    async def _try(self, path: str, fetch: Any, label: str) -> Any | None:
-        """Fetch something optional, remembering what Arbor refuses.
-
-        Only :class:`ArborAuthError` escapes, and that can only come from the
-        login handshake -- so a single forbidden endpoint cannot take a whole
-        scrape down.
-        """
-        key = _endpoint_key(path)
-        if key in self._unavailable:
-            return None
-        try:
-            return await fetch(path)
-        except ArborAuthError:
+        except (ArborAuthError, ArborConfigurationError):
             raise
         except ArborNotAvailableError as err:
             self._log.debug("Arbor does not offer %s %s: %s", label, path, err)

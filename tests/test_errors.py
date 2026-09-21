@@ -53,6 +53,99 @@ class TestOnlyCredentialRejectionPromptsForAPassword(unittest.TestCase):
                     self.assertIsInstance(caught, error)
 
 
+class TestConfigurationErrorsAreNotSwallowed(unittest.TestCase):
+    """A setup problem must not be reported as an unavailable page.
+
+    Regression: the probe script stopping at "which of your two schools?" was
+    caught by the scraper's tolerant page fetch and surfaced as "could not read
+    the Arbor dashboard", which pointed the investigation at the wrong thing.
+    """
+
+    def test_it_is_an_arbor_error_but_not_the_tolerable_kind(self) -> None:
+        self.assertTrue(issubclass(errors.ArborConfigurationError, errors.ArborError))
+        self.assertFalse(
+            issubclass(errors.ArborConfigurationError, errors.ArborNotAvailableError)
+        )
+        self.assertFalse(
+            issubclass(errors.ArborConfigurationError, errors.ArborConnectionError)
+        )
+
+    def test_it_is_not_an_auth_error(self) -> None:
+        # It must not trigger a password prompt either.
+        self.assertFalse(issubclass(errors.ArborConfigurationError, errors.ArborAuthError))
+
+    def test_the_scraper_re_raises_it(self) -> None:
+        import ast
+        from pathlib import Path as _Path
+
+        source = (
+            _Path(__file__).resolve().parents[1]
+            / "custom_components"
+            / "arbor"
+            / "scraper.py"
+        ).read_text()
+        tree = ast.parse(source)
+        reraised = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ExceptHandler) or node.type is None:
+                continue
+            caught = node.type
+            names = (
+                [n.id for n in caught.elts if isinstance(n, ast.Name)]
+                if isinstance(caught, ast.Tuple)
+                else [caught.id] if isinstance(caught, ast.Name) else []
+            )
+            if "ArborConfigurationError" not in names:
+                continue
+            if any(isinstance(stmt, ast.Raise) for stmt in node.body):
+                reraised.append(names)
+        self.assertTrue(
+            reraised,
+            "scraper.py must re-raise ArborConfigurationError rather than "
+            "treating it as an unavailable page",
+        )
+
+
+class TestNoDuplicateDefinitions(unittest.TestCase):
+    """A method defined twice silently loses the first definition.
+
+    Mechanical refactoring produced exactly that in scraper.py, and nothing
+    caught it because both copies happened to be identical.
+    """
+
+    def test_no_module_defines_anything_twice(self) -> None:
+        import ast
+        import collections
+        from pathlib import Path as _Path
+
+        pkg = _Path(__file__).resolve().parents[1] / "custom_components" / "arbor"
+        offenders: list[str] = []
+        for path in sorted(pkg.glob("*.py")):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                names = [
+                    child.name
+                    for child in node.body
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                ]
+                for name, count in collections.Counter(names).items():
+                    if count > 1:
+                        offenders.append(f"{path.name}: {node.name}.{name} x{count}")
+            top = [
+                child.name
+                for child in tree.body
+                if isinstance(
+                    child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                )
+            ]
+            for name, count in collections.Counter(top).items():
+                if count > 1:
+                    offenders.append(f"{path.name}: {name} x{count}")
+        self.assertEqual(offenders, [])
+
+
 class TestOnlyTheLoginStepRaisesAnAuthError(unittest.TestCase):
     """Static guard over the client, so the invariant cannot quietly regress.
 

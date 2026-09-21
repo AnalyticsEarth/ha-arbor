@@ -156,6 +156,26 @@ the frozen URL-constants object in the bundle:
 The `/format/json` suffix is Arbor's general convention for asking a controller
 action for JSON.
 
+## 5a. Observed guardian responses
+
+From a live guardian account at one school, for the record:
+
+- `/auth/current-user-settings/format/json` reports `logged_in`, a `display_name`,
+  `user_type`, `isParentPortalOrStudentPortal`, and a **`jwt`**.
+- `/guardians/home-ui/dashboard` answers with
+  `{type, content, helpCentreUrl, navigation}` -- the page body is under
+  `content`, not at the top level.
+- `/students/home-ui/dashboard` is **403** for a guardian, as expected; it is the
+  student portal. The guardian and staff homepages both answer.
+- `/navigation/main-menu/format/json` and
+  `/widget-data/get-notices/format/json` both answer.
+
+That `jwt` is worth knowing about: the front-end bundle attaches it as
+`Authorization: Bearer <jwt>` when present. Nothing has needed it so far --
+every route above answers with the session cookie alone -- so this integration
+does not send it. If a data endpoint ever returns 401 while the session is
+demonstrably valid, that is the first thing to try.
+
 ## 6. Why discovery rather than hard-coded URLs
 
 Guardian sub-pages (attendance, behaviour, assignments, and so on) are rendered

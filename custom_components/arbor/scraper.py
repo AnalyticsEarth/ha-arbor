@@ -131,9 +131,22 @@ class ArborScraper:
 
         settings = await self._try_json(CURRENT_USER_SETTINGS_PATH)
         if settings is not None:
-            data.guardian_name = _first_text(settings, ("userName", "user_name", "fullName", "name"))
+            # `display_name` and `organizationName` are what a live guardian
+            # account actually returns; the camelCase variants are kept for
+            # tenants on other Arbor releases.
+            data.guardian_name = _first_text(
+                settings,
+                ("display_name", "displayName", "userName", "user_name", "fullName"),
+            )
             data.school_name = _first_text(
-                settings, ("schoolName", "school_name", "institutionName", "applicationName")
+                settings,
+                (
+                    "organizationName",
+                    "organization_name",
+                    "schoolName",
+                    "school_name",
+                    "institutionName",
+                ),
             )
 
         dashboard, homepage_reasons = await self._dashboard()

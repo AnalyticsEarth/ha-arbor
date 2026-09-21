@@ -276,6 +276,7 @@ config entry in Home Assistant.
 | --- | --- |
 | `report` | What every entity would show, plus which domains are empty |
 | `pages` | The portal pages discovered for your account |
+| `shapes` | The structure of **every** page a scrape reads — the one to send when data is missing |
 | `shape <path>` | One page's structure |
 | `json <path>` | One `/format/json` endpoint |
 | `whoami` | **Start here when nothing works.** Proves whether Arbor considers the session logged in, then tries each homepage and endpoint |

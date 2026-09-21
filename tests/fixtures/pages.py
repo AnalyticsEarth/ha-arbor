@@ -419,13 +419,25 @@ SINGLE_CHILD_DASHBOARD = {
     ],
 }
 
+# Shaped after what a live guardian account returns: the keys are
+# `display_name` and `organizationName`, not the camelCase names guessed first.
 CURRENT_USER_SETTINGS = {
     "success": True,
     "items": [
         {
+            "session_id": "0123456789abcdef01234567",
             "logged_in": True,
-            "userName": "Steven Example",
-            "schoolName": "Example School",
+            "display_name": "Steven Example",
+            "language": "en_GB",
+            "applicationId": "uk_bkm_00000",
+            "userId": 12345,
+            "institutionType": "Sec",
+            "isParentPortalOrStudentPortal": True,
+            "country": "GBR",
+            "organizationName": "Example School",
+            "user_type": "guardian",
         }
     ],
+    "action_params": [],
+    "notifications": [],
 }

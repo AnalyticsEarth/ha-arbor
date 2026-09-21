@@ -15,7 +15,7 @@ environment variable if set, otherwise prompted for without echo.
     python3 tools/arbor_probe.py report --email you@example.com
     python3 tools/arbor_probe.py shape /guardians/student-ui/assignments/student-id/12345 \
         --email you@example.com
-    python3 tools/arbor_probe.py pages --email you@example.com
+    python3 tools/arbor_probe.py shapes --email you@example.com > shapes.txt
 
 Output is redacted by default: names, comments and other free text are replaced
 with a type-and-length placeholder so the result can be pasted into an issue.
@@ -551,6 +551,31 @@ async def cmd_pages(client: UrllibArborClient, args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_shapes(client: UrllibArborClient, args: argparse.Namespace) -> int:
+    """Dump the structure of every page a scrape actually reads.
+
+    One command instead of running `shape` against each route by hand, which is
+    what is needed to write extractors for a portal whose payloads have not been
+    seen before.
+    """
+    runner = ArborScraper(client.fetch_page, client.fetch_json, logger=_LOGGER)
+    data = await runner.async_scrape()
+
+    print(f"# school   {data.school_name or '(not found)'}")
+    print(f"# children {len(data.students)}")
+    for reason in data.warnings:
+        print(f"# note     {reason}")
+
+    for student in data.students.values():
+        print(f"\n{'=' * 72}")
+        print(f"# child {student.student_id}  empty: {sorted(student.empty_domains) or 'none'}")
+        print("=" * 72)
+        for key in sorted(student.raw):
+            print(f"\n----- {key}")
+            print(_fmt(redact(student.raw[key], args.show_values)))
+    return 0
+
+
 async def cmd_shape(client: UrllibArborClient, args: argparse.Namespace) -> int:
     payload = await client.fetch_page(args.path)
     print(_fmt(redact(payload, args.show_values)))
@@ -646,6 +671,7 @@ def _summarise(tree: Any) -> str:
 
 COMMANDS = {
     "report": cmd_report,
+    "shapes": cmd_shapes,
     "pages": cmd_pages,
     "shape": cmd_shape,
     "json": cmd_json,
@@ -666,6 +692,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "report: what every entity would show. "
             "pages: the portal pages discovered. "
+            "shapes: the structure of every page a scrape reads. "
             "shape: one page's structure. "
             "json: one /format/json endpoint. "
             "whoami: login plus the dashboard."

@@ -70,8 +70,11 @@ class TestSingleChildScrape(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.data.students), ["40219"])
         self.assertEqual(self.data.students["40219"].name, "Amelia Example")
 
-    def test_reads_the_school_name(self) -> None:
+    def test_reads_the_school_and_guardian_names(self) -> None:
+        # A live account returns `organizationName` and `display_name`, not the
+        # camelCase keys that were guessed first.
         self.assertEqual(self.data.school_name, "Example School")
+        self.assertEqual(self.data.guardian_name, "Steven Example")
 
     def test_populates_every_domain(self) -> None:
         student = self.data.students["40219"]

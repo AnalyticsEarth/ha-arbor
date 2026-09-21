@@ -36,6 +36,10 @@ class TestProbeToolLoads(unittest.TestCase):
         self.assertTrue(hasattr(self.probe, "UrllibArborClient"))
         self.assertTrue(hasattr(self.probe, "ArborScraper"))
 
+    def test_shapes_command_is_available(self) -> None:
+        # One command to dump every scraped page, rather than many `shape` runs.
+        self.assertIn("shapes", self.probe.COMMANDS)
+
     def test_every_command_exists(self) -> None:
         for name, handler in self.probe.COMMANDS.items():
             with self.subTest(command=name):

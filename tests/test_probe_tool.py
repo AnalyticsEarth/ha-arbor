@@ -158,6 +158,24 @@ class TestSchoolSelection(unittest.TestCase):
         ]
     }
 
+    def setUp(self) -> None:
+        # Isolate from any school this machine has already remembered.
+        import os
+        import tempfile
+
+        self._dir = tempfile.TemporaryDirectory()
+        self._previous = os.environ.get("ARBOR_PROBE_CONFIG")
+        os.environ["ARBOR_PROBE_CONFIG"] = str(Path(self._dir.name) / "none.json")
+
+    def tearDown(self) -> None:
+        import os
+
+        if self._previous is None:
+            os.environ.pop("ARBOR_PROBE_CONFIG", None)
+        else:
+            os.environ["ARBOR_PROBE_CONFIG"] = self._previous
+        self._dir.cleanup()
+
     def _client(self, selector):
         import json
 
@@ -178,8 +196,11 @@ class TestSchoolSelection(unittest.TestCase):
         self.assertEqual(client.base_url, "https://wrotham-school.uk.arbor.education")
 
     def test_a_name_fragment_resolves(self) -> None:
+        import contextlib
+        import io
+
         for selector in ("wrotham", "WROTHAM", "Wrotham School"):
-            with self.subTest(selector=selector):
+            with self.subTest(selector=selector), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(
                     self._client(selector)._resolve_school(),
                     "https://wrotham-school.uk.arbor.education",
@@ -210,6 +231,97 @@ class TestSchoolSelection(unittest.TestCase):
             ["report", "--email", "a@b.c", "--school-url", "wrotham"]
         )
         self.assertEqual(args.school, "wrotham")
+
+
+class TestRememberedSchool(unittest.TestCase):
+    """The school is asked for once, then remembered."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.probe = _load_probe()
+
+    def setUp(self) -> None:
+        import os
+        import tempfile
+
+        self._dir = tempfile.TemporaryDirectory()
+        self._previous = os.environ.get("ARBOR_PROBE_CONFIG")
+        self.config = Path(self._dir.name) / "schools.json"
+        os.environ["ARBOR_PROBE_CONFIG"] = str(self.config)
+
+    def tearDown(self) -> None:
+        import os
+
+        if self._previous is None:
+            os.environ.pop("ARBOR_PROBE_CONFIG", None)
+        else:
+            os.environ["ARBOR_PROBE_CONFIG"] = self._previous
+        self._dir.cleanup()
+
+    def test_round_trip(self) -> None:
+        self.assertIsNone(self.probe.remembered_school("a@b.c"))
+        self.probe.remember_school("a@b.c", "https://school.uk.arbor.education")
+        self.assertEqual(
+            self.probe.remembered_school("a@b.c"), "https://school.uk.arbor.education"
+        )
+
+    def test_the_email_is_matched_case_insensitively(self) -> None:
+        self.probe.remember_school("A@B.C", "https://school.uk.arbor.education")
+        self.assertEqual(
+            self.probe.remembered_school("a@b.c"), "https://school.uk.arbor.education"
+        )
+
+    def test_nothing_resembling_a_credential_is_written(self) -> None:
+        self.probe.remember_school("a@b.c", "https://school.uk.arbor.education")
+        stored = self.config.read_text().casefold()
+        self.assertNotIn("password", stored)
+        self.assertNotIn("secret", stored)
+        self.assertNotIn("token", stored)
+        self.assertNotIn("session", stored)
+
+    def test_a_corrupt_file_is_ignored_rather_than_fatal(self) -> None:
+        self.config.parent.mkdir(parents=True, exist_ok=True)
+        self.config.write_text("{not json")
+        self.assertIsNone(self.probe.remembered_school("a@b.c"))
+
+    def test_an_unwritable_location_is_not_fatal(self) -> None:
+        import os
+
+        os.environ["ARBOR_PROBE_CONFIG"] = "/proc/nope/schools.json"
+        # Must not raise: remembering is a convenience, not a requirement.
+        self.probe.remember_school("a@b.c", "https://school.uk.arbor.education")
+
+    def test_forgetting_removes_the_file(self) -> None:
+        self.probe.remember_school("a@b.c", "https://school.uk.arbor.education")
+        self.assertTrue(self.config.exists())
+        self.probe.forget_schools()
+        self.assertFalse(self.config.exists())
+
+    def test_forget_school_needs_no_command_or_email(self) -> None:
+        self.assertEqual(self.probe.main(["--forget-school"]), 0)
+
+    def test_an_explicit_school_overrides_the_memory(self) -> None:
+        self.probe.remember_school("a@b.c", "https://remembered.uk.arbor.education")
+        client = self.probe.UrllibArborClient(
+            "a@b.c", "pw", "https://explicit.uk.arbor.education"
+        )
+        self.assertEqual(client.base_url, "https://explicit.uk.arbor.education")
+
+    def test_ambiguity_without_a_terminal_is_refused_not_guessed(self) -> None:
+        import io
+        import sys as _sys
+
+        schools = [
+            self.probe.protocol.ArborSchool(name="A", base_url="https://a.example"),
+            self.probe.protocol.ArborSchool(name="B", base_url="https://b.example"),
+        ]
+        original = _sys.stdin
+        _sys.stdin = io.StringIO("")
+        try:
+            with self.assertRaises(self.probe.ArborConfigurationError):
+                self.probe._choose_school(schools)
+        finally:
+            _sys.stdin = original
 
 
 class TestProbeToolArgumentChecks(unittest.TestCase):

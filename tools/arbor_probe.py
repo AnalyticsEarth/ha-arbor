@@ -177,7 +177,19 @@ class UrllibArborClient:
         return protocol.parse_school_search(body)
 
     def _resolve_school(self) -> str:
-        """Work out which tenant to use, asking Arbor which ones exist."""
+        """Work out which tenant to use.
+
+        An explicit --school wins; otherwise the choice remembered from a previous
+        successful run is used, which also saves a lookup request.
+        """
+        if self._school_selector is None:
+            if (remembered := remembered_school(self._email)) is not None:
+                print(
+                    f"school:   {remembered} (remembered; --school to change)",
+                    file=sys.stderr,
+                )
+                return remembered
+
         schools = self.list_schools()
 
         if self._school_selector:
@@ -206,13 +218,9 @@ class UrllibArborClient:
             print(f"school:   {schools[0].label}", file=sys.stderr)
             return schools[0].base_url
 
-        raise ArborConfigurationError(
-            f"This account covers {len(schools)} schools, so pick one:\n\n"
-            + _school_listing(schools)
-            + "\n\nA name fragment works too, e.g. --school wrotham.\n"
-            "Each school is a separate Arbor tenant with its own children, and in "
-            "Home Assistant a separate config entry."
-        )
+        chosen = _choose_school(schools)
+        print(f"school:   {chosen.label}", file=sys.stderr)
+        return chosen.base_url
 
     def login(self) -> None:
         if self._base_url is None:
@@ -232,6 +240,7 @@ class UrllibArborClient:
         if not self._has_session_cookie():
             raise ArborConnectionError("Arbor did not issue a session cookie")
         self._logged_in = True
+        remember_school(self._email, self._base_url)
 
     def _has_session_cookie(self) -> bool:
         """Whether the jar holds a session cookie for *this tenant*.
@@ -309,6 +318,87 @@ class UrllibArborClient:
         if self._base_url is None:
             raise ArborConfigurationError("No Arbor school selected")
         return self._base_url
+
+
+def _config_path() -> Path:
+    """Where the chosen school is remembered.
+
+    Only the school URL is ever stored. The password is never written anywhere.
+    """
+    override = os.environ.get("ARBOR_PROBE_CONFIG")
+    if override:
+        return Path(override)
+    return Path.home() / ".config" / "arbor-probe" / "schools.json"
+
+
+def _read_config() -> dict[str, Any]:
+    try:
+        return json.loads(_config_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def remembered_school(email: str) -> str | None:
+    """The school last used successfully for this email address."""
+    schools = _read_config().get("schools")
+    if isinstance(schools, dict):
+        value = schools.get(email.casefold())
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def remember_school(email: str, base_url: str) -> None:
+    """Record the school that worked, so the flag is needed once only."""
+    config = _read_config()
+    schools = config.setdefault("schools", {})
+    if not isinstance(schools, dict):
+        schools = config["schools"] = {}
+    if schools.get(email.casefold()) == base_url:
+        return
+    schools[email.casefold()] = base_url
+    path = _config_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(config, indent=2) + "\n")
+    except OSError as err:
+        _LOGGER.debug("Could not remember the school choice: %s", err)
+
+
+def forget_schools() -> None:
+    """Drop every remembered school choice."""
+    try:
+        _config_path().unlink()
+        print(f"forgot remembered schools ({_config_path()})", file=sys.stderr)
+    except FileNotFoundError:
+        print("nothing was remembered", file=sys.stderr)
+    except OSError as err:
+        print(f"could not forget: {err}", file=sys.stderr)
+
+
+def _choose_school(schools: list[Any]) -> Any:
+    """Ask which school to use, when a terminal is there to ask."""
+    if not sys.stdin.isatty():
+        raise ArborConfigurationError(
+            f"This account covers {len(schools)} schools, so pick one:\n\n"
+            + _school_listing(schools)
+            + "\n\nA name fragment works too, e.g. --school wrotham."
+        )
+    print(f"\nThis account covers {len(schools)} schools:", file=sys.stderr)
+    for index, school in enumerate(schools, start=1):
+        print(f"  {index}) {school.label}", file=sys.stderr)
+    while True:
+        try:
+            answer = input("Which one? [1-%d] " % len(schools)).strip()
+        except EOFError as err:
+            raise ArborConfigurationError("No school chosen") from err
+        if answer.isdigit() and 1 <= int(answer) <= len(schools):
+            chosen = schools[int(answer) - 1]
+            print(
+                "Remembering that choice; pass --school to change it.", file=sys.stderr
+            )
+            return chosen
+        print(f"Enter a number between 1 and {len(schools)}.", file=sys.stderr)
 
 
 def _school_listing(schools: list[Any]) -> str:
@@ -570,6 +660,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
+        nargs="?",
+        default="report",
         choices=sorted(COMMANDS),
         help=(
             "report: what every entity would show. "
@@ -580,7 +672,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("path", nargs="?", help="portal path, for shape and json")
-    parser.add_argument("--email", required=True, help="your Arbor email address")
+    parser.add_argument(
+        "--email",
+        default=os.environ.get("ARBOR_EMAIL"),
+        help="your Arbor email address. Defaults to $ARBOR_EMAIL.",
+    )
     parser.add_argument(
         "--school",
         "--school-url",
@@ -596,6 +692,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="print real values instead of redacted shapes. Your own screen only: "
         "the output will contain your child's personal data.",
     )
+    parser.add_argument(
+        "--forget-school",
+        action="store_true",
+        help="forget the remembered school choice and exit",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     return parser
 
@@ -606,6 +707,14 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
+
+    if args.forget_school:
+        forget_schools()
+        return 0
+
+    if not args.email:
+        print("error: --email is required (or set $ARBOR_EMAIL)", file=sys.stderr)
+        return 2
 
     if args.command in ("shape", "json") and not args.path:
         print(f"error: '{args.command}' needs a path argument", file=sys.stderr)

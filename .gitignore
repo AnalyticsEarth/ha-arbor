@@ -6,3 +6,6 @@ venv/
 .ruff_cache/
 .mypy_cache/
 .DS_Store
+
+# local tooling state
+.arbor-probe.json

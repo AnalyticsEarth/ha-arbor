@@ -274,6 +274,47 @@ class TestSchoolSelection(unittest.TestCase):
         # Must be copy-pasteable, not just a list of names.
         self.assertIn("--school https://ightham-primary.uk.arbor.education", message)
 
+    def test_a_remembered_school_is_honoured_by_every_command(self) -> None:
+        """Regression: the login diagnostic took schools[0] instead.
+
+        With two schools that meant sending one school's password to the other,
+        and Arbor correctly answering that the credentials were wrong -- which
+        read as a rejected password rather than as a bug.
+        """
+        import os
+        import tempfile
+
+        previous = os.environ.get("ARBOR_PROBE_CONFIG")
+        directory = tempfile.TemporaryDirectory()
+        os.environ["ARBOR_PROBE_CONFIG"] = str(Path(directory.name) / "schools.json")
+        try:
+            self.probe.remember_school(
+                "a@b.c", "https://wrotham-school.uk.arbor.education"
+            )
+            client = self._client(None)
+            # Ightham is first in the list; the remembered school must win.
+            self.assertEqual(
+                client.resolve_school(),
+                "https://wrotham-school.uk.arbor.education",
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("ARBOR_PROBE_CONFIG", None)
+            else:
+                os.environ["ARBOR_PROBE_CONFIG"] = previous
+            directory.cleanup()
+
+    def test_resolution_can_reuse_an_already_fetched_list(self) -> None:
+        import contextlib
+        import io
+
+        schools = self.probe.protocol.parse_school_search(
+            __import__("json").dumps(self.SCHOOLS)
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            resolved = self._client("wrotham").resolve_school(schools)
+        self.assertEqual(resolved, "https://wrotham-school.uk.arbor.education")
+
     def test_school_url_remains_accepted_as_a_flag(self) -> None:
         args = self.probe.build_parser().parse_args(
             ["report", "--email", "a@b.c", "--school-url", "wrotham"]

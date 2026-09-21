@@ -197,7 +197,11 @@ class UrllibArborClient:
             raise ArborConnectionError(f"Arbor login service returned HTTP {status}")
         return protocol.parse_school_search(body)
 
-    def _resolve_school(self) -> str:
+    def resolve_school(self, schools: list[Any] | None = None) -> str:
+        """The tenant to use, honouring --school and the remembered choice."""
+        return self._resolve_school(schools)
+
+    def _resolve_school(self, schools: list[Any] | None = None) -> str:
         """Work out which tenant to use.
 
         An explicit --school wins; otherwise the choice remembered from a previous
@@ -211,7 +215,8 @@ class UrllibArborClient:
                 )
                 return remembered
 
-        schools = self.list_schools()
+        if schools is None:
+            schools = self.list_schools()
 
         if self._school_selector:
             needle = self._school_selector.casefold()
@@ -638,9 +643,15 @@ async def cmd_login(client: UrllibArborClient, args: argparse.Namespace) -> int:
         )
         return 3
 
-    base_url = client.base_url or protocol.normalise_base_url(
-        str(schools[0].get("sisUrl"))
-    )
+    # Resolve the school the same way every other command does. Taking
+    # schools[0] instead sent one school's password to another, and Arbor
+    # answered -- correctly -- that the credentials were wrong.
+    try:
+        parsed = protocol.parse_school_search(body)
+    except ArborError as err:
+        print(f"  -> could not read the school list: {err}", file=sys.stderr)
+        return 1
+    base_url = client.base_url or client.resolve_school(parsed)
     print(f"\nstep 2: POST {base_url}/auth/login")
     status, body = client.request_raw(
         protocol.login_request(base_url, client.email, client.password)

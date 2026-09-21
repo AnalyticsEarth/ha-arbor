@@ -59,39 +59,83 @@ class TestStripJsonPrefix(unittest.TestCase):
         self.assertEqual(http_util.strip_json_prefix('  {"a": 1}'), '{"a": 1}')
 
 
+class TestStripRoutePrefix(unittest.TestCase):
+    """Address-bar routes reduce to a plain path; real queries survive."""
+
+    def test_strips_the_spa_route_marker(self) -> None:
+        self.assertEqual(
+            http_util.strip_route_prefix("https://s.uk.arbor.sc/?/guardians/x"),
+            "/guardians/x",
+        )
+        self.assertEqual(http_util.strip_route_prefix("/?/guardians/x"), "/guardians/x")
+
+    def test_leaves_a_plain_path_alone(self) -> None:
+        self.assertEqual(http_util.strip_route_prefix("/guardians/x"), "/guardians/x")
+
+    def test_keeps_a_genuine_query_string(self) -> None:
+        self.assertEqual(
+            http_util.strip_route_prefix("/guardians/x?page=2"), "/guardians/x?page=2"
+        )
+
+
 class TestBuildPageUrl(unittest.TestCase):
-    """Portal routes live in the query string, not the path."""
+    """Portal pages are fetched as paths, not as a `/?/route` query.
+
+    Requesting the address-bar form returns Arbor's HTML application shell
+    instead of data, so this is the difference between working and not.
+    """
 
     BASE = "https://school.uk.arbor.sc"
 
-    def test_builds_the_route_query(self) -> None:
+    def test_uses_the_path_form(self) -> None:
         self.assertEqual(
             http_util.build_page_url(
                 self.BASE, "/guardians/home-ui/dashboard", const.FORMAT_JAVASCRIPT
             ),
-            f"{self.BASE}/?/guardians/home-ui/dashboard&format=javascript",
+            f"{self.BASE}/guardians/home-ui/dashboard?format=javascript",
         )
 
-    def test_accepts_a_route_that_already_has_the_query_prefix(self) -> None:
+    def test_never_emits_the_shell_returning_form(self) -> None:
+        for path in (
+            "/guardians/home-ui/dashboard",
+            "/?/guardians/home-ui/dashboard",
+            "https://school.uk.arbor.sc/?/guardians/home-ui/dashboard",
+        ):
+            with self.subTest(path=path):
+                url = http_util.build_page_url(self.BASE, path, const.FORMAT_JAVASCRIPT)
+                self.assertNotIn("/?/", url)
+                self.assertEqual(
+                    url, f"{self.BASE}/guardians/home-ui/dashboard?format=javascript"
+                )
+
+    def test_keeps_an_id_bearing_route_intact(self) -> None:
         self.assertEqual(
             http_util.build_page_url(
-                self.BASE, "/?/guardians/home-ui/dashboard", const.FORMAT_JAVASCRIPT
+                self.BASE,
+                "/guardians/attendance/index/student-id/40219",
+                const.FORMAT_JAVASCRIPT,
             ),
-            f"{self.BASE}/?/guardians/home-ui/dashboard&format=javascript",
+            f"{self.BASE}/guardians/attendance/index/student-id/40219?format=javascript",
+        )
+
+    def test_appends_to_an_existing_query_string(self) -> None:
+        self.assertEqual(
+            http_util.build_page_url(self.BASE, "/guardians/x?page=2", const.FORMAT_JAVASCRIPT),
+            f"{self.BASE}/guardians/x?page=2&format=javascript",
         )
 
     def test_adds_a_leading_slash(self) -> None:
         self.assertEqual(
             http_util.build_page_url(self.BASE, "guardians/x", const.FORMAT_JAVASCRIPT),
-            f"{self.BASE}/?/guardians/x&format=javascript",
+            f"{self.BASE}/guardians/x?format=javascript",
         )
 
     def test_does_not_duplicate_the_format_flag(self) -> None:
         self.assertEqual(
             http_util.build_page_url(
-                self.BASE, "/guardians/x&format=javascript", const.FORMAT_JAVASCRIPT
+                self.BASE, "/guardians/x?format=javascript", const.FORMAT_JAVASCRIPT
             ),
-            f"{self.BASE}/?/guardians/x&format=javascript",
+            f"{self.BASE}/guardians/x?format=javascript",
         )
 
 

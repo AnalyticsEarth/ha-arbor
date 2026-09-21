@@ -58,17 +58,24 @@ Source: `login.js` → `redirectToSchool()`.
 
 ## 4. Read pages as JSON
 
-Portal routes live in the **query string**, not the path:
+The address bar shows a portal route inside the **query string**:
 
 ```
 https://<school>.uk.arbor.sc/?/guardians/home-ui/dashboard
 ```
 
-The front end fetches page content by appending `format=javascript`, which
-returns the page as a JSON component tree instead of the HTML application shell:
+That is only how the single-page app represents its current route. Its loader
+strips everything up to and including a `?` that is followed by `/`, then
+fetches the result as an ordinary **path**, appending `format=javascript` to get
+the page as a JSON component tree rather than the HTML shell:
 
 ```js
-// arbor-fe.main.*.js, Loader._requestContent
+// arbor-fe.main.*.js, Loader.loadPage
+var r = function (e) {
+  var t = e.indexOf("?");
+  return -1 !== t && "/" === e[t + 1] ? e.substring(t + 1) : e;
+}(e);
+// ... then Loader._requestContent(r, n):
 var k = function (e) {
   return e.includes("format=javascript")
     ? e
@@ -76,11 +83,21 @@ var k = function (e) {
 }(e);
 ```
 
-So this integration requests:
+So the request this integration makes is:
 
 ```
-GET https://<school>.uk.arbor.sc/?/guardians/home-ui/dashboard&format=javascript
+GET https://<school>.uk.arbor.sc/guardians/home-ui/dashboard?format=javascript
 ```
+
+**Not** `GET /?/guardians/home-ui/dashboard&format=javascript`. That form is
+answered with the HTML application shell, whatever the route, so it looks like an
+authentication failure when it is really a malformed request. Confirmed against a
+live tenant while unauthenticated:
+
+| Request | Response |
+| --- | --- |
+| `/guardians/home-ui/dashboard?format=javascript` | `application/json` — `{"success":false,"message":"User is not allowed to access mvc:default/..."}` |
+| `/?/guardians/home-ui/dashboard&format=javascript` | `text/html` — the application shell |
 
 The three portal homepages, all named in the same bundle, are:
 
@@ -89,6 +106,13 @@ The three portal homepages, all named in the same bundle, are:
 | `/guardians/home-ui/dashboard` | guardians / parents |
 | `/students/home-ui/dashboard` | students |
 | `/home-ui/index` | school staff |
+
+### A refused page is HTTP 200 with a JSON error
+
+A page the account may not see comes back `200` with
+`{"success": false, "message": "User is not allowed to access ..."}`, so the
+client treats a falsy `success` as "skip this page" rather than parsing the error
+object as content.
 
 ### Important: an expired session returns HTTP 200
 

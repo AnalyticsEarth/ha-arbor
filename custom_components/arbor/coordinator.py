@@ -121,7 +121,9 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
         roots = [tree for tree in (dashboard, menu) if tree is not None]
         if not roots:
             raise UpdateFailed(
-                "Could not read the Arbor dashboard; the portal layout may have changed"
+                "Could not read the Arbor dashboard. Signing in worked, so this is a "
+                "page-level problem: run the arbor.dump_page service against "
+                f"{GUARDIAN_DASHBOARD_PAGE} to see what your school returns"
             )
 
         data.discovered_pages = classify_pages(roots, DOMAIN_KEYWORDS)

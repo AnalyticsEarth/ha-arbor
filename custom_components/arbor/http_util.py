@@ -44,15 +44,33 @@ def normalise_base_url(raw: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def strip_route_prefix(path: str) -> str:
+    """Reduce a portal URL or address-bar route to its plain path.
+
+    Mirrors Arbor's own loader, which drops everything up to and including a
+    ``?`` that is immediately followed by ``/``. So the address-bar form
+    ``https://school.uk.arbor.sc/?/guardians/home-ui/dashboard`` becomes
+    ``/guardians/home-ui/dashboard``, while a genuine query string such as
+    ``/guardians/x?page=2`` is left alone.
+    """
+    index = path.find("?")
+    if index != -1 and path[index + 1 : index + 2] == "/":
+        return path[index + 1 :]
+    return path
+
+
 def build_page_url(base_url: str, path: str, format_flag: str) -> str:
     """URL that returns a portal page as its JSON component tree.
 
-    Portal routes live in the query string, e.g.
-    ``https://school.uk.arbor.sc/?/guardians/home-ui/dashboard``.
+    Portal routes are fetched as ordinary paths with a normal query string. The
+    ``/?/route`` form is only how the single-page app represents the current
+    route in the address bar; requesting that form returns the HTML application
+    shell instead of data.
     """
-    route = path if path.startswith("/") else f"/{path}"
-    if route.startswith("/?"):
-        route = route[2:]
+    route = strip_route_prefix(path.strip())
+    if not route.startswith("/"):
+        route = f"/{route}"
     if format_flag in route:
-        return f"{base_url}/?{route}"
-    return f"{base_url}/?{route}&{format_flag}"
+        return f"{base_url}{route}"
+    separator = "&" if "?" in route else "?"
+    return f"{base_url}{route}{separator}{format_flag}"

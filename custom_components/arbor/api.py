@@ -24,7 +24,13 @@ from .const import (
     FORMAT_JAVASCRIPT,
     SCHOOL_SEARCH_PATH,
 )
-from .http_util import build_page_url, looks_like_html, normalise_base_url, strip_json_prefix
+from .http_util import (
+    build_page_url,
+    looks_like_html,
+    normalise_base_url,
+    strip_json_prefix,
+    strip_route_prefix,
+)
 from .models import ArborSchool
 
 _LOGGER = logging.getLogger(__name__)
@@ -290,17 +296,15 @@ class ArborClient:
         """
         if self._base_url is None:
             raise ArborAuthError("No Arbor school selected yet")
-        if url.startswith("//"):
+        candidate = strip_route_prefix(url.strip())
+        if candidate.startswith("//"):
             # Protocol-relative: not ours, and not a portal route either.
             raise ArborError(f"Refusing to follow protocol-relative URL: {url}")
-        if url.startswith("/"):
-            return await self.async_fetch_page(url)
-        if not url.startswith(f"{self._base_url}/"):
+        if candidate.startswith("/"):
+            return await self.async_fetch_page(candidate)
+        if not candidate.startswith(f"{self._base_url}/"):
             raise ArborError(f"Refusing to follow off-tenant URL: {url}")
-        target = url if FORMAT_JAVASCRIPT in url else (
-            f"{url}{'&' if '?' in url else '?'}{FORMAT_JAVASCRIPT}"
-        )
-        return await self._fetch(target, description=url)
+        return await self.async_fetch_page(candidate[len(self._base_url) :])
 
     async def _fetch(self, url: str, *, description: str, _retried: bool = False) -> Any:
         """GET a URL, re-authenticating once if the session has expired."""
@@ -324,19 +328,21 @@ class ArborClient:
         except aiohttp.ClientError as err:
             raise ArborConnectionError(f"Error fetching {description}: {err}") from err
 
-        session_gone = status in (401, 403) or looks_like_html(body)
-
-        if session_gone:
-            if _retried:
-                if status in (401, 403):
-                    raise ArborAuthError(f"Arbor denied access to {description}")
-                raise ArborAuthError(
-                    "Arbor served the login shell instead of data; the session was refused"
-                )
-            _LOGGER.debug("Arbor session looks stale for %s, logging in again", description)
-            self._logged_in = False
-            await self.async_login()
-            return await self._fetch(url, description=description, _retried=True)
+        if status in (401, 403) or looks_like_html(body):
+            if not _retried:
+                _LOGGER.debug("Arbor session looks stale for %s, logging in again", description)
+                self._logged_in = False
+                await self.async_login()
+                return await self._fetch(url, description=description, _retried=True)
+            if status in (401, 403):
+                raise ArborAuthError(f"Arbor denied access to {description}")
+            # Logging in validated the credentials and issued a session cookie,
+            # so a shell response here is not an authentication problem -- the
+            # request itself was not one Arbor recognises as a page.
+            raise ArborError(
+                f"Arbor served the application shell rather than data for {description}; "
+                "the request was not recognised as a portal page"
+            )
 
         if status == 404:
             raise ArborError(f"Arbor has no {description} for this account")
@@ -346,8 +352,16 @@ class ArborClient:
         if not body.strip():
             return None
         try:
-            return json.loads(strip_json_prefix(body))
+            payload = json.loads(strip_json_prefix(body))
         except ValueError as err:
             raise ArborConnectionError(
                 f"Arbor returned unparseable JSON for {description}"
             ) from err
+
+        # Arbor reports a page the account may not see as 200 with a JSON error,
+        # e.g. {"success": false, "message": "User is not allowed to access ..."}.
+        if isinstance(payload, dict) and payload.get("success") is False:
+            message = payload.get("message") or "no reason given"
+            raise ArborError(f"Arbor refused {description}: {message}")
+
+        return payload

@@ -85,6 +85,11 @@ DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
     DATA_REPORT_CARDS: ("report card", "report", "reports"),
 }
 
+# hass.data key holding, per config entry, how many consecutive refreshes Arbor
+# has rejected the stored credentials on. Outlives the coordinator so a setup
+# retry loop cannot reset it.
+DATA_REJECTIONS = "credential_rejections"
+
 SERVICE_REFRESH = "refresh"
 SERVICE_DUMP_PAGE = "dump_page"
 

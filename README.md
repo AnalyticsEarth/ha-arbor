@@ -168,6 +168,26 @@ the parser recognises tables and tiles by their wording. If a value is missing:
 3. Open an issue with the (redacted) output. Names, ids and comments are personal
    data — please remove them; the column captions and structure are the useful part.
 
+## When will it ask for my password again?
+
+Almost never. The password is saved in the config entry at setup, reused on every
+refresh, and never cleared — a failed update does not discard it.
+
+Home Assistant only prompts for it again when **Arbor itself rejects the
+credentials on three consecutive refreshes**. Arbor rejects a login while
+rate-limiting and under load, and the saved password is almost never the real
+cause, so a single rejection is logged and retried silently.
+
+Nothing else can trigger the prompt. Not a timeout, not a slow portal, not a 500,
+and not a page your school does not let guardians see — a forbidden endpoint is
+remembered and skipped, because the credentials that reached it were plainly
+valid. The integration enforces this structurally: authentication errors may only
+be raised while logging in, and a test fails the build if any other code path
+raises one.
+
+If you genuinely change your Arbor password, the prompt appears within a few
+refresh cycles; use **Reconfigure** on the integration to update it immediately.
+
 ## Privacy
 
 - Credentials are stored in Home Assistant's config entry store, like every other

@@ -24,6 +24,13 @@ from .const import (
     FORMAT_JAVASCRIPT,
     SCHOOL_SEARCH_PATH,
 )
+from .errors import (
+    ArborAuthError,
+    ArborConnectionError,
+    ArborError,
+    ArborNoSchoolsError,
+    ArborNotAvailableError,
+)
 from .http_util import (
     RESPONSE_NOT_AVAILABLE,
     RESPONSE_SERVER_ERROR,
@@ -37,6 +44,15 @@ from .http_util import (
 )
 from .models import ArborSchool
 
+__all__ = [
+    "ArborAuthError",
+    "ArborClient",
+    "ArborConnectionError",
+    "ArborError",
+    "ArborNoSchoolsError",
+    "ArborNotAvailableError",
+]
+
 _LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=45)
@@ -49,30 +65,6 @@ _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36 HomeAssistant-Arbor"
 )
-
-
-class ArborError(Exception):
-    """Base error for the Arbor client."""
-
-
-class ArborConnectionError(ArborError):
-    """Arbor could not be reached, or answered in a way we cannot parse."""
-
-
-class ArborAuthError(ArborError):
-    """Arbor rejected the supplied credentials, or the session went away."""
-
-
-class ArborNoSchoolsError(ArborAuthError):
-    """The email address is not associated with any Arbor tenant."""
-
-
-class ArborNotAvailableError(ArborError):
-    """Arbor will not serve this page or endpoint to this account.
-
-    Distinct from :class:`ArborAuthError`: the credentials are good, this
-    particular resource is simply not on offer. Callers skip it.
-    """
 
 
 class ArborClient:
@@ -190,7 +182,7 @@ class ArborClient:
         if self._base_url is None:
             schools = await self.async_list_schools()
             if len(schools) > 1:
-                raise ArborAuthError(
+                raise ArborError(
                     "This account has more than one Arbor school; pick one during setup"
                 )
             self._base_url = schools[0].base_url
@@ -231,7 +223,9 @@ class ArborClient:
 
         session_id = first.get("session_id")
         if not session_id:
-            raise ArborAuthError("Arbor logged in but returned no session id")
+            # Arbor accepted the credentials -- it said logged_in -- so this is a
+            # malfunction on its side, not a password the user needs to retype.
+            raise ArborConnectionError("Arbor logged in but returned no session id")
 
         # The portal only becomes usable once this redirect has exchanged the
         # session id for the `mis` cookie.
@@ -250,7 +244,9 @@ class ArborClient:
             raise ArborConnectionError(f"Could not open the Arbor session: {err}") from err
 
         if not self._has_session_cookie():
-            raise ArborAuthError("Arbor did not issue a session cookie")
+            # Again: the credentials were accepted, the handshake just did not
+            # leave us with a usable cookie. Worth retrying, not reporting.
+            raise ArborConnectionError("Arbor did not issue a session cookie")
 
         self._logged_in = True
         _LOGGER.debug("Logged in to Arbor at %s", self._base_url)

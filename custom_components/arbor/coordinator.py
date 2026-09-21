@@ -12,9 +12,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import ArborAuthError, ArborClient, ArborError, ArborNotAvailableError
+from .api import ArborClient
+from .errors import ArborAuthError, ArborError, ArborNotAvailableError
 from .const import (
     ALL_DATA_DOMAINS,
+    DATA_REJECTIONS,
     CALENDAR_DATA_PATH,
     CALENDAR_ENTRY_LIST_PATH,
     CURRENT_USER_SETTINGS_PATH,
@@ -61,6 +63,12 @@ MAX_PAGES_PER_STUDENT = 12
 # that is not a person.
 MAX_PLAUSIBLE_CHILDREN = 8
 
+# How many refreshes in a row Arbor must reject the stored credentials before the
+# user is asked to re-enter them. Arbor rejects a login under load and while
+# rate-limiting, and the password is almost never the real problem, so a single
+# rejection is retried silently instead of interrupting the user.
+REJECTIONS_BEFORE_REAUTH = 3
+
 # Domains that are worth a page fetch of their own.
 _FETCHED_DOMAINS = (
     DATA_ATTENDANCE,
@@ -103,15 +111,44 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
         # again. Rebuilt daily in case the school switches a feature on.
         self._unavailable: set[str] = set()
         self._unavailable_day: date | None = None
+        # Consecutive refreshes in which Arbor rejected the stored credentials.
+        # Held in hass.data rather than on self, because a failed first refresh
+        # makes Home Assistant retry setup with a brand new coordinator -- an
+        # instance attribute would reset every time and never reach the
+        # threshold, so a genuinely changed password would never be reported.
+        self._entry_id = entry.entry_id
+        self._rejections: dict[str, int] = hass.data.setdefault(DOMAIN, {}).setdefault(
+            DATA_REJECTIONS, {}
+        )
 
     async def _async_update_data(self) -> ArborData:
-        """Run one full refresh."""
+        """Run one full refresh.
+
+        Only a credential rejection repeated across several refreshes asks the
+        user for their password again. The stored password stays in the config
+        entry throughout and is never cleared, so a transient rejection costs a
+        failed update and nothing else.
+        """
         try:
-            return await self._async_scrape()
+            data = await self._async_scrape()
         except ArborAuthError as err:
+            count = self._rejections.get(self._entry_id, 0) + 1
+            self._rejections[self._entry_id] = count
+            if count < REJECTIONS_BEFORE_REAUTH:
+                _LOGGER.warning(
+                    "Arbor rejected the stored credentials (attempt %d of %d). "
+                    "Retrying with the saved password before asking for a new one: %s",
+                    count,
+                    REJECTIONS_BEFORE_REAUTH,
+                    err,
+                )
+                raise UpdateFailed(f"Arbor rejected the stored credentials: {err}") from err
             raise ConfigEntryAuthFailed(str(err)) from err
         except ArborError as err:
             raise UpdateFailed(str(err)) from err
+
+        self._rejections.pop(self._entry_id, None)
+        return data
 
     # -- orchestration ------------------------------------------------------
 

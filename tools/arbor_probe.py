@@ -11,6 +11,7 @@ Your password is never taken as an argument (it would land in your shell
 history) and never written anywhere. It is read from the ARBOR_PASSWORD
 environment variable if set, otherwise prompted for without echo.
 
+    export ARBOR_SCHOOL=wrotham          # when the account has several schools
     python3 tools/arbor_probe.py report --email you@example.com
     python3 tools/arbor_probe.py shape /guardians/student-ui/assignments/student-id/12345 \
         --email you@example.com
@@ -96,6 +97,7 @@ classify_response = http_util.classify_response
 refusal_message = http_util.refusal_message
 strip_json_prefix = http_util.strip_json_prefix
 strip_route_prefix = http_util.strip_route_prefix
+normalise_base_url = http_util.normalise_base_url
 
 describe_shape = parser.describe_shape
 ArborScraper = scraper.ArborScraper
@@ -112,10 +114,18 @@ class UrllibArborClient:
     integration's modules so the two cannot disagree about what Arbor said.
     """
 
-    def __init__(self, email: str, password: str, base_url: str | None = None) -> None:
+    def __init__(self, email: str, password: str, school: str | None = None) -> None:
         self._email = email
         self._password = password
-        self._base_url = base_url.rstrip("/") if base_url else None
+        # A school may be given as a URL, which needs no lookup, or as a name
+        # fragment, which is resolved against the account's schools at login.
+        self._base_url: str | None = None
+        self._school_selector: str | None = None
+        if school and (selector := school.strip()):
+            if "." in selector or "://" in selector:
+                self._base_url = normalise_base_url(selector)
+            else:
+                self._school_selector = selector
         self._logged_in = False
         self._jar = http.cookiejar.CookieJar()
         self._opener = urllib.request.build_opener(
@@ -165,22 +175,47 @@ class UrllibArborClient:
             raise ArborConnectionError(f"Arbor login service returned HTTP {status}")
         return protocol.parse_school_search(body)
 
+    def _resolve_school(self) -> str:
+        """Work out which tenant to use, asking Arbor which ones exist."""
+        schools = self.list_schools()
+
+        if self._school_selector:
+            needle = self._school_selector.casefold()
+            matches = [
+                school
+                for school in schools
+                if needle in school.base_url.casefold()
+                or needle in (school.name or "").casefold()
+                or needle in (school.short_name or "").casefold()
+            ]
+            if len(matches) == 1:
+                print(f"school:   {matches[0].label}", file=sys.stderr)
+                return matches[0].base_url
+            if not matches:
+                raise ArborError(
+                    f"No school matches {self._school_selector!r}.\n\n"
+                    + _school_listing(schools)
+                )
+            raise ArborError(
+                f"{self._school_selector!r} matches {len(matches)} schools.\n\n"
+                + _school_listing(matches)
+            )
+
+        if len(schools) == 1:
+            print(f"school:   {schools[0].label}", file=sys.stderr)
+            return schools[0].base_url
+
+        raise ArborError(
+            f"This account covers {len(schools)} schools, so pick one:\n\n"
+            + _school_listing(schools)
+            + "\n\nA name fragment works too, e.g. --school wrotham.\n"
+            "Each school is a separate Arbor tenant with its own children, and in "
+            "Home Assistant a separate config entry."
+        )
+
     def login(self) -> None:
         if self._base_url is None:
-            schools = self.list_schools()
-            if len(schools) > 1:
-                listing = "\n".join(
-                    f"  --school-url {school.base_url}    # {school.label}"
-                    for school in schools
-                )
-                raise ArborError(
-                    f"This account covers {len(schools)} schools, so pick one:\n\n"
-                    f"{listing}\n\n"
-                    "Each school is a separate Arbor tenant with its own children, "
-                    "and in Home Assistant a separate config entry."
-                )
-            self._base_url = schools[0].base_url
-            print(f"school:   {schools[0].label} -> {self._base_url}", file=sys.stderr)
+            self._base_url = self._resolve_school()
 
         request = protocol.login_request(self._base_url, self._email, self._password)
         status, body = self._request(
@@ -273,6 +308,13 @@ class UrllibArborClient:
         if self._base_url is None:
             raise ArborError("No Arbor school selected")
         return self._base_url
+
+
+def _school_listing(schools: list[Any]) -> str:
+    """Copy-pasteable list of schools and the flag to select each."""
+    return "\n".join(
+        f"  --school {school.base_url}    # {school.label}" for school in schools
+    )
 
 
 def _decode(response: Any) -> str:
@@ -539,9 +581,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("path", nargs="?", help="portal path, for shape and json")
     parser.add_argument("--email", required=True, help="your Arbor email address")
     parser.add_argument(
+        "--school",
         "--school-url",
-        help="school base URL, e.g. https://your-school.uk.arbor.education "
-        "(only needed when the account covers several schools)",
+        dest="school",
+        default=os.environ.get("ARBOR_SCHOOL") or os.environ.get("ARBOR_SCHOOL_URL"),
+        help="which school, when the account covers more than one. Either a URL "
+        "(https://your-school.uk.arbor.education) or a name fragment (wrotham). "
+        "Defaults to $ARBOR_SCHOOL.",
     )
     parser.add_argument(
         "--show-values",
@@ -572,7 +618,7 @@ def main(argv: list[str] | None = None) -> int:
         print("error: no password given", file=sys.stderr)
         return 2
 
-    client = UrllibArborClient(args.email, password, args.school_url)
+    client = UrllibArborClient(args.email, password, args.school)
     try:
         return asyncio.run(COMMANDS[args.command](client, args))
     except ArborAuthError as err:

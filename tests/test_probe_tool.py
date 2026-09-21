@@ -134,6 +134,84 @@ class TestProbeToolSessionChecks(unittest.TestCase):
         self.assertIn("studentName", summary)
 
 
+class TestSchoolSelection(unittest.TestCase):
+    """An account can cover several Arbor tenants; picking one must be easy."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.probe = _load_probe()
+
+    SCHOOLS = {
+        "payload": [
+            {
+                "name": "Ightham Primary School",
+                "shortName": "Ightham Primary School",
+                "sisUrl": "ightham-primary.uk.arbor.education",
+                "postalCode": "TN15 9DD",
+            },
+            {
+                "name": "Wrotham School",
+                "shortName": "Wrotham School",
+                "sisUrl": "wrotham-school.uk.arbor.education",
+                "postalCode": "TN15 7RD",
+            },
+        ]
+    }
+
+    def _client(self, selector):
+        import json
+
+        probe = self.probe
+
+        class Stub(probe.UrllibArborClient):
+            def _request(self, method, url, body, headers):
+                return 200, json.dumps(TestSchoolSelection.SCHOOLS)
+
+        return Stub("a@b.c", "pw", selector)
+
+    def test_a_url_needs_no_lookup(self) -> None:
+        client = self._client("https://wrotham-school.uk.arbor.education")
+        self.assertEqual(client.base_url, "https://wrotham-school.uk.arbor.education")
+
+    def test_a_bare_host_is_accepted(self) -> None:
+        client = self._client("wrotham-school.uk.arbor.education")
+        self.assertEqual(client.base_url, "https://wrotham-school.uk.arbor.education")
+
+    def test_a_name_fragment_resolves(self) -> None:
+        for selector in ("wrotham", "WROTHAM", "Wrotham School"):
+            with self.subTest(selector=selector):
+                self.assertEqual(
+                    self._client(selector)._resolve_school(),
+                    "https://wrotham-school.uk.arbor.education",
+                )
+
+    def test_an_ambiguous_fragment_is_refused(self) -> None:
+        with self.assertRaises(self.probe.ArborError) as caught:
+            self._client("school")._resolve_school()
+        self.assertIn("matches 2 schools", str(caught.exception))
+
+    def test_an_unknown_fragment_lists_what_is_available(self) -> None:
+        with self.assertRaises(self.probe.ArborError) as caught:
+            self._client("nope")._resolve_school()
+        message = str(caught.exception)
+        self.assertIn("No school matches", message)
+        self.assertIn("--school https://wrotham-school.uk.arbor.education", message)
+
+    def test_no_selector_with_several_schools_is_refused_helpfully(self) -> None:
+        with self.assertRaises(self.probe.ArborError) as caught:
+            self._client(None)._resolve_school()
+        message = str(caught.exception)
+        self.assertIn("covers 2 schools", message)
+        # Must be copy-pasteable, not just a list of names.
+        self.assertIn("--school https://ightham-primary.uk.arbor.education", message)
+
+    def test_school_url_remains_accepted_as_a_flag(self) -> None:
+        args = self.probe.build_parser().parse_args(
+            ["report", "--email", "a@b.c", "--school-url", "wrotham"]
+        )
+        self.assertEqual(args.school, "wrotham")
+
+
 class TestProbeToolArgumentChecks(unittest.TestCase):
     """Commands that need a path must say so rather than failing later."""
 

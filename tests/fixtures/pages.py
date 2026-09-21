@@ -389,3 +389,43 @@ STUDENT_RECORD_PAGE = {
         "registrationGroupName": "9BQ",
     },
 }
+
+
+# A guardian with one child, so the shared dashboard and calendar feeds are
+# unambiguous and the whole pipeline can be exercised.
+SINGLE_CHILD_DASHBOARD = {
+    "success": True,
+    "items": [
+        {
+            "xtype": "container",
+            "items": [
+                {
+                    "text": "Amelia Example",
+                    "url": "/guardians/student-profile/index/student-id/40219",
+                }
+            ],
+        },
+        {
+            "xtype": "navigation",
+            "items": [
+                {"text": "Attendance", "url": "/guardians/attendance/index/student-id/40219"},
+                {"text": "Log Absence", "url": "/guardians/absence/new/student-id/40219"},
+                {"text": "Behaviour", "url": "/guardians/behaviour/index/student-id/40219"},
+                {"text": "Assignments", "url": "/guardians/assignments/index/student-id/40219"},
+                {"text": "Progress", "url": "/guardians/progress/index/student-id/40219"},
+                {"text": "Meals", "url": "/guardians/meals/index/student-id/40219"},
+            ],
+        },
+    ],
+}
+
+CURRENT_USER_SETTINGS = {
+    "success": True,
+    "items": [
+        {
+            "logged_in": True,
+            "userName": "Steven Example",
+            "schoolName": "Example School",
+        }
+    ],
+}

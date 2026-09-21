@@ -54,49 +54,62 @@ class TestOnlyCredentialRejectionPromptsForAPassword(unittest.TestCase):
 
 
 class TestOnlyTheLoginStepRaisesAnAuthError(unittest.TestCase):
-    """Static guard over api.py, so the invariant cannot quietly regress."""
+    """Static guard over the client, so the invariant cannot quietly regress.
 
-    @staticmethod
-    def _auth_raises() -> list[tuple[int, str]]:
+    Scans every module that can raise, not just one, and asserts it found
+    something -- when the login code moved to protocol.py, that sanity check is
+    what revealed the guard had stopped looking at anything.
+    """
+
+    #: Functions allowed to report an authentication failure: the school lookup,
+    #: which validates credentials as a side effect, and the login itself.
+    PERMITTED = frozenset(
+        {
+            "async_list_schools",
+            "_login_locked",
+            "parse_school_search",
+            "parse_login",
+        }
+    )
+
+    MODULES = ("api", "protocol", "coordinator", "scraper")
+
+    @classmethod
+    def _auth_raises(cls) -> list[tuple[str, int, str]]:
         import ast
 
-        source = (
-            Path(__file__).resolve().parents[1]
-            / "custom_components"
-            / "arbor"
-            / "api.py"
-        ).read_text()
-        tree = ast.parse(source)
-
-        # Map every line to the function that contains it.
-        owner: dict[int, str] = {}
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for line in range(node.lineno, (node.end_lineno or node.lineno) + 1):
-                    owner.setdefault(line, node.name)
-
-        found = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Raise) or node.exc is None:
+        pkg = (
+            Path(__file__).resolve().parents[1] / "custom_components" / "arbor"
+        )
+        found: list[tuple[str, int, str]] = []
+        for module in cls.MODULES:
+            path = pkg / f"{module}.py"
+            if not path.exists():
                 continue
-            call = node.exc
-            name = call.func if isinstance(call, ast.Call) else call
-            if isinstance(name, ast.Name) and name.id in (
-                "ArborAuthError",
-                "ArborNoSchoolsError",
-            ):
-                found.append((node.lineno, owner.get(node.lineno, "<module>")))
+            tree = ast.parse(path.read_text())
+
+            owner: dict[int, str] = {}
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for line in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+                        owner.setdefault(line, node.name)
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Raise) or node.exc is None:
+                    continue
+                call = node.exc
+                name = call.func if isinstance(call, ast.Call) else call
+                if isinstance(name, ast.Name) and name.id in (
+                    "ArborAuthError",
+                    "ArborNoSchoolsError",
+                ):
+                    found.append((module, node.lineno, owner.get(node.lineno, "<module>")))
         return found
 
     def test_auth_errors_only_come_from_the_login_flow(self) -> None:
-        """Regression: a 403 on one optional endpoint prompted for a password.
-
-        Only the login handshake and the school lookup -- which validates
-        credentials as a side effect -- may report an authentication failure.
-        """
-        permitted = {"async_list_schools", "_login_locked"}
+        """Regression: a 403 on one optional endpoint prompted for a password."""
         offenders = [
-            (line, func) for line, func in self._auth_raises() if func not in permitted
+            entry for entry in self._auth_raises() if entry[2] not in self.PERMITTED
         ]
         self.assertEqual(
             offenders,
@@ -106,8 +119,12 @@ class TestOnlyTheLoginStepRaisesAnAuthError(unittest.TestCase):
         )
 
     def test_the_guard_is_actually_looking_at_something(self) -> None:
-        # A typo in the AST walk would make the test above vacuously pass.
-        self.assertTrue(self._auth_raises())
+        # A move or a rename could otherwise make the test above vacuous.
+        self.assertTrue(
+            self._auth_raises(),
+            "found no authentication raises at all -- has the login code moved "
+            f"out of {self.MODULES}?",
+        )
 
 
 if __name__ == "__main__":

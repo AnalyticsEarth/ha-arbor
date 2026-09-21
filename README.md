@@ -223,18 +223,80 @@ refresh cycles; use **Reconfigure** on the integration to update it immediately.
 - Only URLs on your school's own Arbor host are ever followed, so a link inside a
   scraped page cannot redirect the integration off-tenant.
 
+## Checking it against your own account
+
+`tools/arbor_probe.py` runs the integration's own scraper from a terminal — same
+login protocol, same page URLs, same parser, same orchestration — so a problem
+can be diagnosed without restarting Home Assistant. Only the HTTP transport
+differs; it uses the standard library, so there is nothing to install.
+
+```bash
+python3 tools/arbor_probe.py report --email you@example.com
+```
+
+It prompts for your password without echoing it. Set `ARBOR_PASSWORD` instead if
+you prefer. There is deliberately **no `--password` flag**: it would be recorded
+in your shell history.
+
+```
+── A… E…  (id 40219)
+   attendance        96.4%
+   behaviour net     114.0
+   assignments       3 total, 2 outstanding, 1 overdue
+   next lesson       Biology at 2026-09-22 09:00:00
+   EMPTY             timetable
+   pages scraped     7
+     - assignments:Assignments
+     ...
+```
+
+| Command | What it does |
+| --- | --- |
+| `report` | What every entity would show, plus which domains are empty |
+| `pages` | The portal pages discovered for your account |
+| `shape <path>` | One page's structure |
+| `json <path>` | One `/format/json` endpoint |
+| `whoami` | Log in and dump the dashboard |
+
+Output is **redacted by default**: names are masked and free text is replaced
+with a type-and-length placeholder such as `str[14]`, so a result can be pasted
+into an issue as-is. Add `--show-values` to see the real data on your own screen —
+useful for confirming a parse is actually correct:
+
+```
+   sample assignments:
+     · 'Macbeth Act 2 essay' subject='English' due=2026-09-18 status='Submitted' grade='B+'
+```
+
 ## Development
 
-The parser has no third-party dependencies, so its tests run on a plain Python
-install:
+Nothing outside the Home Assistant entity layer depends on a third-party
+package, so the tests run on a plain Python install:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-`tests/fixtures/pages.py` holds sample Arbor component trees in both grid
-dialects Arbor emits. Adding a fixture from your own school (with personal data
-removed) is the single most useful contribution.
+The layering is what makes that possible:
+
+| Module | Depends on | Tested |
+| --- | --- | --- |
+| `errors.py` | nothing | taxonomy, plus a static guard that only the login flow raises an auth error |
+| `http_util.py` | nothing | URL building, response classification |
+| `protocol.py` | the above | the login request/response sequence |
+| `parser.py` | the above | both payload dialects, every extractor |
+| `scraper.py` | the above | the whole pipeline, against a fake portal |
+| `api.py`, `coordinator.py`, entities | aiohttp, Home Assistant | — |
+
+`ArborScraper` takes its two fetchers as arguments, so `tests/test_scraper.py`
+drives a complete guardian account from fixtures, and `tools/arbor_probe.py`
+drives a real one over the standard library. A parser change is therefore
+verifiable both ways without Home Assistant in the loop.
+
+`tests/fixtures/pages.py` holds sample Arbor payloads in both dialects — pages
+that declare their own columns, and pages that just return records. Adding a
+fixture from your own school (with personal data removed; `arbor_probe.py shape`
+gives you exactly that) is the single most useful contribution.
 
 ## Disclaimer
 

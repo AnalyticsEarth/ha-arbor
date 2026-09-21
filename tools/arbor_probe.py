@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""Drive the Arbor integration's scraper from the command line.
+
+Runs exactly the code Home Assistant runs -- the same login protocol, the same
+page URLs, the same parser and the same orchestration -- against a real account,
+so a change can be checked in a second instead of by restarting Home Assistant.
+Only the HTTP transport differs: this uses the standard library, so there is
+nothing to install.
+
+Your password is never taken as an argument (it would land in your shell
+history) and never written anywhere. It is read from the ARBOR_PASSWORD
+environment variable if set, otherwise prompted for without echo.
+
+    python3 tools/arbor_probe.py report --email you@example.com
+    python3 tools/arbor_probe.py shape /guardians/student-ui/assignments/student-id/12345 \
+        --email you@example.com
+    python3 tools/arbor_probe.py pages --email you@example.com
+
+Output is redacted by default: names, comments and other free text are replaced
+with a type-and-length placeholder so the result can be pasted into an issue.
+Pass --show-values to see the real thing on your own screen.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import getpass
+import gzip
+import http.cookiejar
+import json
+import logging
+import os
+import sys
+import urllib.error
+import urllib.request
+import zlib
+from pathlib import Path
+from typing import Any
+
+# Import the integration's own modules without pulling in Home Assistant.
+# `arbor/__init__.py` imports homeassistant, as every custom component's does, so
+# the modules are loaded by path under a synthetic package instead. Everything
+# loaded this way is standard-library only; nothing needs installing.
+import importlib.util  # noqa: E402
+import types  # noqa: E402
+
+_ROOT = Path(__file__).resolve().parents[1]
+_PKG_DIR = _ROOT / "custom_components" / "arbor"
+_PKG_NAME = "arbor_probe_pkg"
+
+if not _PKG_DIR.is_dir():
+    raise SystemExit(f"cannot find the integration at {_PKG_DIR}")
+
+_package = types.ModuleType(_PKG_NAME)
+_package.__path__ = [str(_PKG_DIR)]
+sys.modules[_PKG_NAME] = _package
+
+
+def _load(name: str) -> types.ModuleType:
+    """Load one integration module by file path."""
+    full_name = f"{_PKG_NAME}.{name}"
+    if full_name in sys.modules:
+        return sys.modules[full_name]
+    spec = importlib.util.spec_from_file_location(full_name, _PKG_DIR / f"{name}.py")
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[full_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+const = _load("const")
+errors = _load("errors")
+http_util = _load("http_util")
+protocol = _load("protocol")
+parser = _load("parser")
+scraper = _load("scraper")
+
+CURRENT_USER_SETTINGS_PATH = const.CURRENT_USER_SETTINGS_PATH
+FORMAT_JAVASCRIPT = const.FORMAT_JAVASCRIPT
+GUARDIAN_DASHBOARD_PAGE = const.GUARDIAN_DASHBOARD_PAGE
+
+ArborAuthError = errors.ArborAuthError
+ArborConnectionError = errors.ArborConnectionError
+ArborError = errors.ArborError
+ArborNotAvailableError = errors.ArborNotAvailableError
+
+RESPONSE_NOT_AVAILABLE = http_util.RESPONSE_NOT_AVAILABLE
+RESPONSE_SERVER_ERROR = http_util.RESPONSE_SERVER_ERROR
+RESPONSE_SESSION_STALE = http_util.RESPONSE_SESSION_STALE
+build_page_url = http_util.build_page_url
+classify_response = http_util.classify_response
+refusal_message = http_util.refusal_message
+strip_json_prefix = http_util.strip_json_prefix
+strip_route_prefix = http_util.strip_route_prefix
+
+describe_shape = parser.describe_shape
+ArborScraper = scraper.ArborScraper
+
+_LOGGER = logging.getLogger("arbor_probe")
+TIMEOUT = 45
+
+
+class UrllibArborClient:
+    """The integration's ArborClient, over urllib instead of aiohttp.
+
+    Deliberately mirrors ``api.ArborClient``: same protocol calls, same URL
+    building, same response classification. Anything shared lives in the
+    integration's modules so the two cannot disagree about what Arbor said.
+    """
+
+    def __init__(self, email: str, password: str, base_url: str | None = None) -> None:
+        self._email = email
+        self._password = password
+        self._base_url = base_url.rstrip("/") if base_url else None
+        self._logged_in = False
+        self._jar = http.cookiejar.CookieJar()
+        self._opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self._jar)
+        )
+
+    @property
+    def base_url(self) -> str | None:
+        return self._base_url
+
+    # -- transport ----------------------------------------------------------
+
+    def _request(
+        self, method: str, url: str, body: str | None, headers: dict[str, str]
+    ) -> tuple[int, str]:
+        request = urllib.request.Request(
+            url,
+            data=body.encode("utf-8") if body is not None else None,
+            headers={**headers, "Accept-Encoding": "gzip, deflate"},
+            method=method,
+        )
+        try:
+            with self._opener.open(request, timeout=TIMEOUT) as response:
+                return response.status, _decode(response)
+        except urllib.error.HTTPError as err:
+            return err.code, _decode(err)
+        except urllib.error.URLError as err:
+            raise ArborConnectionError(f"Cannot reach {url}: {err.reason}") from err
+        except TimeoutError as err:
+            raise ArborConnectionError(f"Timed out fetching {url}") from err
+
+    # -- login --------------------------------------------------------------
+
+    def list_schools(self) -> list[Any]:
+        request = protocol.school_search_request(self._email, self._password)
+        status, body = self._request(
+            request.method, request.url, request.body, request.headers
+        )
+        if status == 429:
+            raise ArborConnectionError("Arbor rate-limited the login; try again later")
+        if status >= 500:
+            raise ArborConnectionError(f"Arbor login service returned HTTP {status}")
+        return protocol.parse_school_search(body)
+
+    def login(self) -> None:
+        if self._base_url is None:
+            schools = self.list_schools()
+            if len(schools) > 1:
+                names = ", ".join(school.label for school in schools)
+                raise ArborError(
+                    f"This account covers several schools; pass --school-url. Found: {names}"
+                )
+            self._base_url = schools[0].base_url
+            print(f"school:   {schools[0].label} -> {self._base_url}", file=sys.stderr)
+
+        request = protocol.login_request(self._base_url, self._email, self._password)
+        status, body = self._request(
+            request.method, request.url, request.body, request.headers
+        )
+        session_id = protocol.parse_login(body, status)
+        self._request(
+            "GET",
+            protocol.session_handshake_url(self._base_url, session_id),
+            None,
+            {"User-Agent": protocol.USER_AGENT},
+        )
+        if not any(
+            cookie.name in protocol.SESSION_COOKIE_NAMES for cookie in self._jar
+        ):
+            raise ArborConnectionError("Arbor did not issue a session cookie")
+        self._logged_in = True
+
+    # -- fetching -----------------------------------------------------------
+
+    def _fetch(self, url: str, description: str, retried: bool = False) -> Any:
+        if not self._logged_in:
+            self.login()
+        status, body = self._request("GET", url, None, dict(protocol.PAGE_HEADERS))
+        verdict = classify_response(status, body, retried=retried)
+
+        if verdict == RESPONSE_SESSION_STALE:
+            if retried:
+                raise ArborNotAvailableError(f"{description}: session refused")
+            self._logged_in = False
+            self.login()
+            return self._fetch(url, description, retried=True)
+        if verdict == RESPONSE_NOT_AVAILABLE:
+            raise ArborNotAvailableError(
+                f"Arbor will not serve {description} to this account (HTTP {status})"
+            )
+        if verdict == RESPONSE_SERVER_ERROR:
+            raise ArborConnectionError(f"HTTP {status} for {description}")
+
+        if not body.strip():
+            return None
+        try:
+            payload = json.loads(strip_json_prefix(body))
+        except ValueError as err:
+            raise ArborConnectionError(f"Unparseable JSON for {description}") from err
+        if (refusal := refusal_message(payload)) is not None:
+            raise ArborNotAvailableError(f"Arbor refused {description}: {refusal}")
+        return payload
+
+    async def fetch_page(self, path: str) -> Any:
+        """Fetch a portal page. Async so the scraper can use it unchanged."""
+        base = self._ensure_logged_in()
+        candidate = strip_route_prefix(path.strip())
+        if candidate.startswith("//"):
+            raise ArborError(f"Refusing protocol-relative URL: {path}")
+        if not candidate.startswith("/"):
+            if not candidate.startswith(f"{base}/"):
+                raise ArborError(f"Refusing off-tenant URL: {path}")
+            candidate = candidate[len(base) :]
+        return self._fetch(
+            build_page_url(base, candidate, FORMAT_JAVASCRIPT), f"page {path}"
+        )
+
+    async def fetch_json(self, path: str) -> Any:
+        """Fetch a JSON endpoint. Async so the scraper can use it unchanged."""
+        base = self._ensure_logged_in()
+        return self._fetch(f"{base}{path}", f"endpoint {path}")
+
+    def _ensure_logged_in(self) -> str:
+        """Log in if needed and return the tenant base URL."""
+        if not self._logged_in:
+            self.login()
+        if self._base_url is None:
+            raise ArborError("No Arbor school selected")
+        return self._base_url
+
+
+def _decode(response: Any) -> str:
+    """Read a urllib response, handling gzip and deflate."""
+    raw = response.read()
+    encoding = (response.headers.get("Content-Encoding") or "").lower()
+    if "gzip" in encoding:
+        raw = gzip.decompress(raw)
+    elif "deflate" in encoding:
+        raw = zlib.decompress(raw, -zlib.MAX_WBITS)
+    charset = response.headers.get_content_charset() or "utf-8"
+    return raw.decode(charset, errors="replace")
+
+
+# ---------------------------------------------------------------------------
+# output
+# ---------------------------------------------------------------------------
+
+
+def redact(value: Any, show_values: bool) -> Any:
+    """Replace free text with a type-and-length placeholder."""
+    if show_values:
+        return value
+    return describe_shape(value)
+
+
+def _fmt(value: Any) -> str:
+    return json.dumps(value, indent=2, default=str, ensure_ascii=False)
+
+
+def _mask_name(name: str, show_values: bool) -> str:
+    if show_values or not name:
+        return name
+    parts = name.split()
+    return " ".join(part[0] + "…" for part in parts) or "…"
+
+
+def report(data: Any, show_values: bool) -> None:
+    """Print what each entity would show."""
+    print(f"\nschool:   {data.school_name or '(not found)'}")
+    print(f"guardian: {_mask_name(data.guardian_name or '', show_values) or '(not found)'}")
+    print(f"children: {len(data.students)}")
+    for warning in data.warnings:
+        print(f"  ! {warning}")
+
+    for student in data.students.values():
+        print(f"\n── {_mask_name(student.name, show_values)}  (id {student.student_id})")
+        print(f"   year group        {student.year_group or '-'}")
+        print(f"   form group        {student.form_group or '-'}")
+        print(f"   attendance        {_or_dash(student.attendance.percentage, '%')}")
+        print(f"   behaviour net     {_or_dash(student.behaviour_points_net)}")
+        print(
+            f"     positive {_or_dash(student.behaviour_points_positive)}"
+            f"  negative {_or_dash(student.behaviour_points_negative)}"
+            f"  incidents {len(student.behaviour_incidents)}"
+        )
+        print(
+            f"   assignments       {len(student.assignments)} total,"
+            f" {len(student.outstanding_assignments)} outstanding,"
+            f" {len(student.overdue_assignments)} overdue"
+        )
+        lesson = student.next_lesson
+        print(
+            f"   next lesson       {lesson.summary if lesson else '-'}"
+            f"{f' at {lesson.start}' if lesson and lesson.start else ''}"
+        )
+        print(f"   lessons known     {len(student.lessons)}")
+        account = student.primary_account
+        print(
+            f"   meal balance      {account.balance if account else '-'}"
+            f"{f' ({account.name})' if account else ''}"
+        )
+        print(f"   grades            {len(student.grades)}")
+        print(f"   notices           {len(student.notices)}")
+        if student.empty_domains:
+            print(f"   EMPTY             {', '.join(sorted(student.empty_domains))}")
+        print(f"   pages scraped     {len(student.raw)}")
+        for key in sorted(student.raw):
+            print(f"     - {key}")
+
+        if show_values:
+            _print_samples(student)
+
+
+def _print_samples(student: Any) -> None:
+    """Show a couple of real rows, to confirm the parse is actually right."""
+    if student.assignments:
+        print("   sample assignments:")
+        for item in student.assignments[:3]:
+            print(
+                f"     · {item.title!r} subject={item.subject!r} due={item.due} "
+                f"status={item.status!r} grade={item.grade!r}"
+            )
+    if student.behaviour_incidents:
+        print("   sample behaviour:")
+        for item in student.behaviour_incidents[:3]:
+            print(
+                f"     · {item.occurred} {item.kind!r} points={item.points} "
+                f"subject={item.subject!r}"
+            )
+    if student.lessons:
+        print("   sample lessons:")
+        for item in student.lessons[:4]:
+            print(f"     · {item.summary!r} {item.start} -> {item.end} at {item.location!r}")
+
+
+def _or_dash(value: Any, suffix: str = "") -> str:
+    return "-" if value is None else f"{value}{suffix}"
+
+
+# ---------------------------------------------------------------------------
+# commands
+# ---------------------------------------------------------------------------
+
+
+async def cmd_report(client: UrllibArborClient, args: argparse.Namespace) -> int:
+    scraper = ArborScraper(client.fetch_page, client.fetch_json, logger=_LOGGER)
+    data = await scraper.async_scrape()
+    report(data, args.show_values)
+    if scraper.unavailable:
+        print("\nrefused by Arbor for this account:")
+        for key in sorted(scraper.unavailable):
+            print(f"  - {key}")
+    empty = [s for s in data.students.values() if s.empty_domains]
+    if empty:
+        print(
+            "\nSome domains are empty. Run:  "
+            f"python3 {sys.argv[0]} shape <path> --email {args.email}",
+            file=sys.stderr,
+        )
+    return 0
+
+
+async def cmd_pages(client: UrllibArborClient, args: argparse.Namespace) -> int:
+    scraper = ArborScraper(client.fetch_page, client.fetch_json, logger=_LOGGER)
+    data = await scraper.async_scrape()
+    print("\ndiscovered pages by domain:")
+    for domain, entries in sorted(data.discovered_pages.items()):
+        print(f"  {domain}")
+        for caption, url in entries.items():
+            label = caption if args.show_values else "<caption>"
+            print(f"    {label}: {url}")
+    return 0
+
+
+async def cmd_shape(client: UrllibArborClient, args: argparse.Namespace) -> int:
+    payload = await client.fetch_page(args.path)
+    print(_fmt(redact(payload, args.show_values)))
+    return 0
+
+
+async def cmd_json(client: UrllibArborClient, args: argparse.Namespace) -> int:
+    payload = await client.fetch_json(args.path)
+    print(_fmt(redact(payload, args.show_values)))
+    return 0
+
+
+async def cmd_whoami(client: UrllibArborClient, args: argparse.Namespace) -> int:
+    client.login()
+    print(f"base_url: {client.base_url}")
+    for path in (CURRENT_USER_SETTINGS_PATH,):
+        try:
+            print(f"\n{path}:")
+            print(_fmt(redact(await client.fetch_json(path), args.show_values)))
+        except ArborError as err:
+            print(f"  ! {err}")
+    try:
+        print(f"\n{GUARDIAN_DASHBOARD_PAGE}:")
+        print(_fmt(redact(await client.fetch_page(GUARDIAN_DASHBOARD_PAGE), args.show_values)))
+    except ArborError as err:
+        print(f"  ! {err}")
+    return 0
+
+
+COMMANDS = {
+    "report": cmd_report,
+    "pages": cmd_pages,
+    "shape": cmd_shape,
+    "json": cmd_json,
+    "whoami": cmd_whoami,
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "command",
+        choices=sorted(COMMANDS),
+        help=(
+            "report: what every entity would show. "
+            "pages: the portal pages discovered. "
+            "shape: one page's structure. "
+            "json: one /format/json endpoint. "
+            "whoami: login plus the dashboard."
+        ),
+    )
+    parser.add_argument("path", nargs="?", help="portal path, for shape and json")
+    parser.add_argument("--email", required=True, help="your Arbor email address")
+    parser.add_argument(
+        "--school-url",
+        help="school base URL, e.g. https://your-school.uk.arbor.education "
+        "(only needed when the account covers several schools)",
+    )
+    parser.add_argument(
+        "--show-values",
+        action="store_true",
+        help="print real values instead of redacted shapes. Your own screen only: "
+        "the output will contain your child's personal data.",
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+
+    if args.command in ("shape", "json") and not args.path:
+        print(f"error: '{args.command}' needs a path argument", file=sys.stderr)
+        return 2
+
+    # Never a command-line argument: it would be recorded in shell history.
+    password = os.environ.get("ARBOR_PASSWORD")
+    if not password:
+        password = getpass.getpass(f"Arbor password for {args.email}: ")
+    if not password:
+        print("error: no password given", file=sys.stderr)
+        return 2
+
+    client = UrllibArborClient(args.email, password, args.school_url)
+    try:
+        return asyncio.run(COMMANDS[args.command](client, args))
+    except ArborAuthError as err:
+        print(f"\nauthentication failed: {err}", file=sys.stderr)
+        return 3
+    except ArborNotAvailableError as err:
+        print(f"\nnot available: {err}", file=sys.stderr)
+        return 4
+    except ArborError as err:
+        print(f"\nerror: {err}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

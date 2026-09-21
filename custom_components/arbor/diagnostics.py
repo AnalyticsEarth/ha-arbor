@@ -73,6 +73,7 @@ async def async_get_config_entry_diagnostics(
             coordinator.update_interval.total_seconds() if coordinator.update_interval else None
         ),
         "last_update_success": coordinator.last_update_success,
+        "refused_endpoints": sorted(coordinator.scraper.unavailable),
         "student_count": len(data.students) if data else 0,
         "discovered_pages": (
             {

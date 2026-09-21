@@ -12,18 +12,12 @@ import asyncio
 import json
 import logging
 from typing import Any
-from urllib.parse import quote
 
 import aiohttp
 from yarl import URL
 
-from .const import (
-    ARBOR_LOGIN_HOST,
-    AUTH_LOGIN_PATH,
-    AUTH_LOGOUT_PATH,
-    FORMAT_JAVASCRIPT,
-    SCHOOL_SEARCH_PATH,
-)
+from . import protocol
+from .const import AUTH_LOGOUT_PATH, FORMAT_JAVASCRIPT
 from .errors import (
     ArborAuthError,
     ArborConnectionError,
@@ -57,14 +51,7 @@ _LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=45)
 
-# Arbor's own client posts a JSON body under jQuery's default content type.
-# Mirroring that exactly avoids depending on how the PHP side sniffs the body.
-_JQUERY_CONTENT_TYPE = "application/x-www-form-urlencoded; charset=UTF-8"
 
-_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/125.0 Safari/537.36 HomeAssistant-Arbor"
-)
 
 
 class ArborClient:
@@ -104,69 +91,30 @@ class ArborClient:
         and it validates the credentials as a side effect: wrong details come
         back as an empty payload.
         """
-        payload = json.dumps({"email": self._email, "password": self._password})
-        url = f"{ARBOR_LOGIN_HOST}{SCHOOL_SEARCH_PATH}"
+        request = protocol.school_search_request(self._email, self._password)
+        status, body = await self._post(request, "the Arbor login service")
+        if status == 429:
+            raise ArborConnectionError(
+                "Arbor rate-limited the login request; try again in a few minutes"
+            )
+        if status >= 500:
+            raise ArborConnectionError(f"Arbor login service returned HTTP {status}")
+        return protocol.parse_school_search(body)
+
+    async def _post(self, request: protocol.HttpRequest, what: str) -> tuple[int, str]:
+        """Make one protocol request and return its status and body."""
         try:
             async with self._session.post(
-                url,
-                data=payload,
-                headers={"Content-Type": _JQUERY_CONTENT_TYPE, "User-Agent": _USER_AGENT},
+                request.url,
+                data=request.body,
+                headers=request.headers,
                 timeout=REQUEST_TIMEOUT,
             ) as response:
-                if response.status == 429:
-                    raise ArborConnectionError(
-                        "Arbor rate-limited the login request; try again in a few minutes"
-                    )
-                body = await response.text()
-                if response.status >= 500:
-                    raise ArborConnectionError(
-                        f"Arbor login service returned HTTP {response.status}"
-                    )
+                return response.status, await response.text()
         except TimeoutError as err:
-            raise ArborConnectionError("Timed out contacting the Arbor login service") from err
+            raise ArborConnectionError(f"Timed out contacting {what}") from err
         except aiohttp.ClientError as err:
-            raise ArborConnectionError(f"Cannot reach the Arbor login service: {err}") from err
-
-        try:
-            data = json.loads(strip_json_prefix(body))
-        except ValueError as err:
-            raise ArborConnectionError(
-                "Arbor login service did not return JSON; the portal may be down"
-            ) from err
-
-        entries = data.get("payload") if isinstance(data, dict) else None
-        if not entries:
-            raise ArborNoSchoolsError(
-                "Arbor did not return a school for this email and password"
-            )
-
-        schools: list[ArborSchool] = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            sis_url = entry.get("sisUrl") or entry.get("sis_url")
-            if not sis_url:
-                continue
-            try:
-                base_url = normalise_base_url(str(sis_url))
-            except ValueError:
-                continue
-            location = entry.get("postalCode") or entry.get("location") or None
-            if isinstance(location, str):
-                location = location.lstrip(", ").strip() or None
-            schools.append(
-                ArborSchool(
-                    name=str(entry.get("name") or entry.get("shortName") or base_url),
-                    base_url=base_url,
-                    short_name=entry.get("shortName") or None,
-                    location=location,
-                    application_id=entry.get("applicationId") or None,
-                )
-            )
-
-        if not schools:
-            raise ArborNoSchoolsError("Arbor returned schools without a usable URL")
-        return schools
+            raise ArborConnectionError(f"Cannot reach {what}: {err}") from err
 
     # -- authentication -----------------------------------------------------
 
@@ -188,52 +136,17 @@ class ArborClient:
             self._base_url = schools[0].base_url
 
         self._logged_in = False
-        payload = json.dumps({"items": [{"username": self._email, "password": self._password}]})
-        url = f"{self._base_url}{AUTH_LOGIN_PATH}?lang=en"
-        try:
-            async with self._session.post(
-                url,
-                data=payload,
-                headers={"Content-Type": _JQUERY_CONTENT_TYPE, "User-Agent": _USER_AGENT},
-                timeout=REQUEST_TIMEOUT,
-            ) as response:
-                body = await response.text()
-                status = response.status
-        except TimeoutError as err:
-            raise ArborConnectionError("Timed out logging in to Arbor") from err
-        except aiohttp.ClientError as err:
-            raise ArborConnectionError(f"Cannot reach {self._base_url}: {err}") from err
-
-        if status == 429:
-            raise ArborConnectionError("Arbor rate-limited the login; try again later")
-
-        try:
-            data = json.loads(strip_json_prefix(body))
-        except ValueError as err:
-            raise ArborConnectionError(
-                f"Arbor login returned a non-JSON response (HTTP {status})"
-            ) from err
-
-        items = data.get("items") if isinstance(data, dict) else None
-        first = items[0] if isinstance(items, list) and items else {}
-        if not data.get("success") or not (
-            isinstance(first, dict) and first.get("logged_in") is True
-        ):
-            raise ArborAuthError("Arbor rejected the email address or password")
-
-        session_id = first.get("session_id")
-        if not session_id:
-            # Arbor accepted the credentials -- it said logged_in -- so this is a
-            # malfunction on its side, not a password the user needs to retype.
-            raise ArborConnectionError("Arbor logged in but returned no session id")
+        request = protocol.login_request(self._base_url, self._email, self._password)
+        status, body = await self._post(request, self._base_url)
+        session_id = protocol.parse_login(body, status)
 
         # The portal only becomes usable once this redirect has exchanged the
         # session id for the `mis` cookie.
-        handshake = f"{self._base_url}/?session={quote(str(session_id))}&lang=en"
+        handshake = protocol.session_handshake_url(self._base_url, session_id)
         try:
             async with self._session.get(
                 handshake,
-                headers={"User-Agent": _USER_AGENT},
+                headers={"User-Agent": protocol.USER_AGENT},
                 timeout=REQUEST_TIMEOUT,
                 allow_redirects=True,
             ) as response:
@@ -244,8 +157,8 @@ class ArborClient:
             raise ArborConnectionError(f"Could not open the Arbor session: {err}") from err
 
         if not self._has_session_cookie():
-            # Again: the credentials were accepted, the handshake just did not
-            # leave us with a usable cookie. Worth retrying, not reporting.
+            # The credentials were accepted; the handshake just did not leave us
+            # with a usable cookie. Worth retrying, not reporting.
             raise ArborConnectionError("Arbor did not issue a session cookie")
 
         self._logged_in = True
@@ -256,7 +169,7 @@ class ArborClient:
         if self._base_url is None:
             return False
         cookies = self._session.cookie_jar.filter_cookies(URL(self._base_url))
-        return any(name in cookies for name in ("mis", "PHPSESSID", "arbor_session"))
+        return any(name in cookies for name in protocol.SESSION_COOKIE_NAMES)
 
     async def async_logout(self) -> None:
         """Best-effort invalidation of the portal session."""
@@ -266,7 +179,7 @@ class ArborClient:
         try:
             async with self._session.get(
                 f"{self._base_url}{AUTH_LOGOUT_PATH}",
-                headers={"User-Agent": _USER_AGENT},
+                headers={"User-Agent": protocol.USER_AGENT},
                 timeout=REQUEST_TIMEOUT,
             ) as response:
                 await response.read()
@@ -322,11 +235,7 @@ class ArborClient:
         try:
             async with self._session.get(
                 url,
-                headers={
-                    "User-Agent": _USER_AGENT,
-                    "Accept": "application/json, text/javascript, */*; q=0.01",
-                    "X-Requested-With": "XMLHttpRequest",
-                },
+                headers=protocol.PAGE_HEADERS,
                 timeout=REQUEST_TIMEOUT,
             ) as response:
                 status = response.status

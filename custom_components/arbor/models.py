@@ -229,3 +229,5 @@ class ArborData:
     school_notices: list[Notice] = field(default_factory=list)
     discovered_pages: dict[str, dict[str, str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    #: Guardian-wide payloads, kept for diagnostics rather than for entities.
+    raw: dict[str, object] = field(default_factory=dict)

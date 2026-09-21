@@ -21,9 +21,10 @@ from .errors import (
     ArborError,
     ArborNotAvailableError,
 )
+from . import protocol
 from .const import (
     ALL_DATA_DOMAINS,
-    CALENDAR_DATA_OBJECT_PATH,
+    CALENDAR_ENTRY_LIST_PATH,
     CALENDAR_DATA_PATH,
     CALENDAR_ENTRY_LIST_PATH,
     CURRENT_USER_SETTINGS_PATH,
@@ -70,6 +71,8 @@ _LOGGER = logging.getLogger(__name__)
 type PageFetcher = Callable[[str], Awaitable[Any]]
 #: Fetches a direct `/format/json` endpoint.
 type JsonFetcher = Callable[[str], Awaitable[Any]]
+#: POSTs a JSON body to an endpoint. Optional: only the calendar needs it.
+type JsonPoster = Callable[[str, str], Awaitable[Any]]
 
 # Portal homepages, in the order they are worth trying for a guardian.
 HOMEPAGE_CANDIDATES = (
@@ -116,12 +119,14 @@ class ArborScraper:
         self,
         fetch_page: PageFetcher,
         fetch_json: JsonFetcher,
+        post_json: JsonPoster | None = None,
         *,
         logger: logging.Logger | None = None,
     ) -> None:
-        """Take the two fetchers this scraper will use."""
+        """Take the fetchers this scraper will use."""
         self._fetch_page = fetch_page
         self._fetch_json = fetch_json
+        self._post_json = post_json
         self._log = logger or _LOGGER
         # Page paths learned on a previous scrape, reused so discovery cost is
         # paid once rather than on every poll.
@@ -176,6 +181,12 @@ class ArborScraper:
         data.warnings.extend(homepage_reasons)
 
         data.discovered_pages = classify_pages(roots, DOMAIN_KEYWORDS)
+        # Kept for diagnostics: the dashboard is where a portal's statistics
+        # usually live, and it was invisible in every shape dump so far.
+        if dashboard is not None:
+            data.raw["dashboard"] = dashboard
+        if menu is not None:
+            data.raw["main-menu"] = menu
 
         refs = extract_student_refs(roots)
         if not refs:
@@ -448,17 +459,41 @@ class ArborScraper:
         return trees
 
     async def _calendar_object_trees(self, student: StudentData) -> list[Any]:
-        """Calendar events for the objects this child's pages reference."""
+        """Calendar events for the object this child's calendar page references.
+
+        Arbor's calendar page POSTs its view, date range and an object filter;
+        asking for the same thing with the ids in the path is refused. See
+        ``Mis.calendar.Abstract.load`` in the ExtJS bundle.
+        """
+        if self._post_json is None:
+            return []
         references = extract_calendar_references(list(student.raw.values()))
+        if not references:
+            return []
+
+        today = date.today()
+        end = today + timedelta(days=7)
         trees: list[Any] = []
-        for object_id, type_id in references[:2]:
-            path = CALENDAR_DATA_OBJECT_PATH.format(
-                object_id=object_id, object_type_id=type_id
+        for object_id, type_id in references[:1]:
+            body = protocol.calendar_request_body(
+                view="period",
+                start_date=today.isoformat(),
+                end_date=end.isoformat(),
+                object_id=object_id,
+                object_type_id=type_id,
             )
-            tree = await self._try_json(path)
-            if tree is not None:
-                trees.append(tree)
-                student.raw[f"calendar:{path}"] = tree
+            try:
+                response = await self._post_json(CALENDAR_ENTRY_LIST_PATH, body)
+            except (ArborAuthError, ArborConfigurationError):
+                raise
+            except ArborError as err:
+                self._log.debug("Calendar POST refused: %s", err)
+                continue
+            if response is None:
+                continue
+            payload = protocol.calendar_response_payload(response)
+            trees.append(payload)
+            student.raw[f"calendar:POST {CALENDAR_ENTRY_LIST_PATH}"] = payload
         return trees
 
     def _calendar_templates(self) -> list[tuple[str, tuple[str, ...]]]:

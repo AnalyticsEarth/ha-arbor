@@ -210,6 +210,40 @@ class ArborClient:
         """Fetch a direct JSON endpoint."""
         return await self._fetch(self.endpoint_url(path), description=f"endpoint {path}")
 
+    async def async_post_json(self, path: str, body: str) -> Any:
+        """POST a JSON body to an endpoint and return its parsed response."""
+        if self._base_url is None:
+            raise ArborConfigurationError("No Arbor school selected yet")
+        if not self._logged_in:
+            await self.async_login()
+        url = f"{self._base_url}{path if path.startswith('/') else '/' + path}"
+        headers = {**protocol.PAGE_HEADERS, "Content-Type": "application/json"}
+        try:
+            async with self._session.post(
+                url, data=body, headers=headers, timeout=REQUEST_TIMEOUT
+            ) as response:
+                status = response.status
+                text = await response.text()
+        except TimeoutError as err:
+            raise ArborConnectionError(f"Timed out posting to {path}") from err
+        except aiohttp.ClientError as err:
+            raise ArborConnectionError(f"Error posting to {path}: {err}") from err
+
+        verdict = classify_response(status, text, retried=True)
+        if verdict == RESPONSE_NOT_AVAILABLE:
+            raise ArborNotAvailableError(
+                f"Arbor will not accept {path} from this account (HTTP {status})"
+            )
+        if verdict == RESPONSE_SERVER_ERROR:
+            raise ArborConnectionError(f"Arbor returned HTTP {status} for {path}")
+        try:
+            payload = json.loads(strip_json_prefix(text))
+        except ValueError as err:
+            raise ArborConnectionError(f"Unparseable JSON from {path}") from err
+        if (refusal := refusal_message(payload)) is not None:
+            raise ArborNotAvailableError(f"Arbor refused {path}: {refusal}")
+        return payload
+
     async def async_fetch_absolute(self, url: str) -> Any:
         """Fetch a JSON tree from a URL Arbor itself handed us.
 

@@ -244,6 +244,31 @@ Two consequences worth stating:
   beginning "Log ", "Change ", "Pay " and so on is not followed, and any payload
   that comes back as a slideover is discarded.
 
+### The calendar is a POST, and not to the widget endpoint
+
+Two different things serve calendar data, and only one of them serves a
+timetable page.
+
+The **homepage widget** GETs
+`/widget-data/get-calendar-data/format/json/object-id/<id>/object-type-id/<typeId>/`.
+For a guardian that answers `{"items": [], "success": true}` -- and asking it
+about a particular student is refused outright.
+
+The **calendar page** (`mis-calendar-calendar`) POSTs to
+`/calendar-entry/list-static/format/json/`. From `Mis.calendar.Abstract.load` in
+the ExtJS bundle:
+
+```js
+var o = {action_params: {view: e, startDate: t, endDate: r, filters: []}};
+n.referenceObjectTypeId && n.referenceObjectId && o.action_params.filters.push({
+  field_name: "object",
+  value: {_objectTypeId: n.referenceObjectTypeId, _objectId: n.referenceObjectId}
+});
+```
+
+and it reads the answer from `items[0].fields.response.value`. The component's
+props carry the two ids, so the filter is built from the child's own page.
+
 ### The calendar feed needs its object
 
 Calling `/widget-data/get-calendar-data/format/json/` bare returns

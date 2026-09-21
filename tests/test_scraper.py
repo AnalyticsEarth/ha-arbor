@@ -23,9 +23,15 @@ scraper_module = load("scraper")
 class FakePortal:
     """Serves fixture pages, and records what was asked for."""
 
-    def __init__(self, routes: dict[str, object]) -> None:
+    def __init__(
+        self,
+        routes: dict[str, object],
+        posts: dict[str, object] | None = None,
+    ) -> None:
         self.routes = routes
+        self.posts = posts or {}
         self.requested: list[str] = []
+        self.posted: list[tuple[str, str]] = []
 
     async def fetch(self, path: str) -> object:
         self.requested.append(path)
@@ -35,6 +41,15 @@ class FakePortal:
                     raise payload
                 return payload
         raise errors.ArborNotAvailableError(f"no such page: {path}")
+
+    async def post(self, path: str, body: str) -> object:
+        self.posted.append((path, body))
+        for route, payload in self.posts.items():
+            if path.startswith(route):
+                if isinstance(payload, Exception):
+                    raise payload
+                return payload
+        raise errors.ArborNotAvailableError(f"no such endpoint: {path}")
 
 
 def single_child_portal() -> FakePortal:
@@ -277,12 +292,13 @@ class TestWrothamShapedPortal(unittest.IsolatedAsyncioTestCase):
                 "/guardians/calendar/index/student-id/40219": (
                     pages.CALENDAR_COMPONENT_PAGE
                 ),
-                "/widget-data/get-calendar-data/format/json/object-id/1879"
-                "/object-type-id/43/": pages.CALENDAR_ENDPOINT,
                 "/auth/current-user-settings/format/json": pages.CURRENT_USER_SETTINGS,
-            }
+            },
+            posts={"/calendar-entry/list-static/format/json/": pages.CALENDAR_POST_RESPONSE},
         )
-        self.scraper = scraper_module.ArborScraper(self.portal.fetch, self.portal.fetch)
+        self.scraper = scraper_module.ArborScraper(
+            self.portal.fetch, self.portal.fetch, self.portal.post
+        )
         self.data = await self.scraper.async_scrape()
         self.student = self.data.students["40219"]
 
@@ -303,22 +319,34 @@ class TestWrothamShapedPortal(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.student.behaviour_points_negative, 1.0)
         self.assertEqual(self.student.behaviour_points_net, 1.0)
 
-    def test_the_calendar_is_fetched_for_the_referenced_object(self) -> None:
-        self.assertIn(
-            "/widget-data/get-calendar-data/format/json/object-id/1879"
-            "/object-type-id/43/",
-            self.portal.requested,
-        )
+    def test_the_calendar_is_posted_with_an_object_filter(self) -> None:
+        import json
 
-    def test_lessons_come_from_that_feed(self) -> None:
+        self.assertEqual(len(self.portal.posted), 1)
+        path, body = self.portal.posted[0]
+        self.assertEqual(path, "/calendar-entry/list-static/format/json/")
+        params = json.loads(body)["action_params"]
+        self.assertEqual(
+            params["filters"],
+            [
+                {
+                    "field_name": "object",
+                    "value": {"_objectTypeId": 43, "_objectId": 1879},
+                }
+            ],
+        )
+        self.assertIn("startDate", params)
+        self.assertIn("endDate", params)
+
+    def test_lessons_come_from_that_response(self) -> None:
         self.assertEqual(len(self.student.lessons), 3)
         self.assertEqual(self.student.lessons[0].summary, "Biology")
 
-    def test_an_object_scoped_calendar_avoids_the_generic_feeds(self) -> None:
+    def test_the_generic_feeds_are_not_used_once_the_post_works(self) -> None:
         generic = [
             path
             for path in self.portal.requested
-            if path.startswith("/widget-data/get-calendar-data/format/json/start-date")
+            if "get-calendar-data" in path or path.startswith("/calendar-entry/")
         ]
         self.assertEqual(generic, [])
 

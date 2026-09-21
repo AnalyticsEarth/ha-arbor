@@ -367,6 +367,25 @@ class UrllibArborClient:
         base = self._ensure_logged_in()
         return self._fetch(f"{base}{path}", f"endpoint {path}")
 
+    async def post_json(self, path: str, body: str) -> Any:
+        """POST a JSON body, for the endpoints that need one."""
+        base = self._ensure_logged_in()
+        status, text = self._request(
+            "POST",
+            f"{base}{path}",
+            body,
+            {**protocol.PAGE_HEADERS, "Content-Type": "application/json"},
+        )
+        verdict = classify_response(status, text, retried=True)
+        if verdict != http_util.RESPONSE_OK:
+            raise ArborNotAvailableError(f"POST {path}: HTTP {status}")
+        payload = _safe_json(text)
+        if payload is None:
+            raise ArborConnectionError(f"Unparseable JSON from POST {path}")
+        if (refusal := refusal_message(payload)) is not None:
+            raise ArborNotAvailableError(f"Arbor refused POST {path}: {refusal}")
+        return payload
+
     def _ensure_logged_in(self) -> str:
         """Reuse a saved session if there is one, otherwise log in."""
         if not self._logged_in:
@@ -641,7 +660,9 @@ def _or_dash(value: Any, suffix: str = "") -> str:
 
 
 async def cmd_report(client: UrllibArborClient, args: argparse.Namespace) -> int:
-    scraper = ArborScraper(client.fetch_page, client.fetch_json, logger=_LOGGER)
+    scraper = ArborScraper(
+        client.fetch_page, client.fetch_json, client.post_json, logger=_LOGGER
+    )
     data = await scraper.async_scrape()
     report(data, args.show_values)
     if scraper.unavailable:
@@ -659,7 +680,9 @@ async def cmd_report(client: UrllibArborClient, args: argparse.Namespace) -> int
 
 
 async def cmd_pages(client: UrllibArborClient, args: argparse.Namespace) -> int:
-    scraper = ArborScraper(client.fetch_page, client.fetch_json, logger=_LOGGER)
+    scraper = ArborScraper(
+        client.fetch_page, client.fetch_json, client.post_json, logger=_LOGGER
+    )
     data = await scraper.async_scrape()
     print("\ndiscovered pages by domain:")
     for domain, entries in sorted(data.discovered_pages.items()):
@@ -677,13 +700,19 @@ async def cmd_shapes(client: UrllibArborClient, args: argparse.Namespace) -> int
     what is needed to write extractors for a portal whose payloads have not been
     seen before.
     """
-    runner = ArborScraper(client.fetch_page, client.fetch_json, logger=_LOGGER)
+    runner = ArborScraper(
+        client.fetch_page, client.fetch_json, client.post_json, logger=_LOGGER
+    )
     data = await runner.async_scrape()
 
     print(f"# school   {data.school_name or '(not found)'}")
     print(f"# children {len(data.students)}")
     for reason in data.warnings:
         print(f"# note     {reason}")
+
+    for key in sorted(data.raw):
+        print(f"\n----- (guardian-wide) {key}")
+        print(_fmt(redact(data.raw[key], args.show_values, args.depth)))
 
     for student in data.students.values():
         print(f"\n{'=' * 72}")

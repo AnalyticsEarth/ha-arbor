@@ -723,3 +723,26 @@ WROTHAM_SHAPED_DASHBOARD = {
         }
     },
 }
+
+
+# The calendar POST's response, wrapped the way the ExtJS bundle unwraps it:
+# items[0].fields.response.value
+CALENDAR_POST_RESPONSE = {
+    "success": True,
+    "items": [
+        {
+            "fields": {
+                "response": {
+                    "value": {
+                        "currentView": {
+                            "view": "period",
+                            "start": "2026-09-22",
+                            "end": "2026-09-28",
+                        },
+                        "events": CALENDAR_ENDPOINT["items"],
+                    }
+                }
+            }
+        }
+    ],
+}

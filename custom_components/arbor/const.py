@@ -33,12 +33,9 @@ CURRENT_USER_SETTINGS_PATH = "/auth/current-user-settings/format/json"
 MAIN_MENU_PATH = "/navigation/main-menu/format/json"
 NOTICES_PATH = "/widget-data/get-notices/format/json"
 CALENDAR_DATA_PATH = "/widget-data/get-calendar-data/format/json/"
-# How Arbor's own calendar widget asks for a particular object's events. Taken
-# from the front-end bundle:
-#   GET_CALENDAR_DATA + "object-id/" + id + "/object-type-id/" + typeId + "/"
-CALENDAR_DATA_OBJECT_PATH = (
-    CALENDAR_DATA_PATH + "object-id/{object_id}/object-type-id/{object_type_id}/"
-)
+# The calendar page's own source. It is a POST carrying the view, the date range
+# and an object filter -- see protocol.calendar_request_body. A GET with the ids
+# in the path is refused; that form belongs to the homepage widget only.
 CALENDAR_ENTRY_LIST_PATH = "/calendar-entry/list-static/format/json/"
 NOTIFICATIONS_PATH = "/user-notification/get-notifications/format/json/"
 

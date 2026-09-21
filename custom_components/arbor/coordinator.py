@@ -53,7 +53,10 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
         )
         self.client = client
         self.scraper = ArborScraper(
-            client.async_fetch_absolute, client.async_fetch_json, logger=_LOGGER
+            client.async_fetch_absolute,
+            client.async_fetch_json,
+            client.async_post_json,
+            logger=_LOGGER,
         )
         # Consecutive refreshes in which Arbor rejected the stored credentials.
         # Held in hass.data rather than on self, because a failed first refresh

@@ -264,3 +264,55 @@ def session_handshake_url(base_url: str, session_id: str) -> str:
     Note this is a genuine query parameter, not the ``/?/route`` page form.
     """
     return f"{base_url}/?session={quote(session_id)}&lang=en"
+
+
+def calendar_request_body(
+    *,
+    view: str,
+    start_date: str,
+    end_date: str,
+    object_id: str | None = None,
+    object_type_id: str | None = None,
+) -> str:
+    """Body for Arbor's calendar list request.
+
+    Taken from ``Mis.calendar.Abstract.load`` in the ExtJS bundle: the calendar
+    POSTs its view and date range, and scopes itself to an object with a filter.
+    A GET with the ids in the path -- which is what the homepage *widget* uses --
+    is refused for this endpoint.
+    """
+    params: dict[str, Any] = {
+        "view": view,
+        "startDate": start_date,
+        "endDate": end_date,
+        "filters": [],
+    }
+    if object_id and object_type_id:
+        params["filters"].append(
+            {
+                "field_name": "object",
+                "value": {
+                    "_objectTypeId": int(object_type_id),
+                    "_objectId": int(object_id),
+                },
+            }
+        )
+    return json.dumps({"action_params": params})
+
+
+def calendar_response_payload(data: Any) -> Any:
+    """The calendar payload out of its response envelope.
+
+    ``items[0].fields.response.value`` -- the shape the bundle reads.
+    """
+    items = data.get("items") if isinstance(data, dict) else None
+    first = items[0] if isinstance(items, list) and items else None
+    if not isinstance(first, dict):
+        return data
+    fields = first.get("fields")
+    if not isinstance(fields, dict):
+        return data
+    response = fields.get("response")
+    if isinstance(response, dict) and "value" in response:
+        return response["value"]
+    return data

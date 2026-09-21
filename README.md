@@ -279,6 +279,7 @@ config entry in Home Assistant.
 | `shapes` | The structure of **every** page a scrape reads — the one to send when data is missing. `--depth N` if you see `<max depth>` |
 | `shape <path>` | One page's structure |
 | `json <path>` | One `/format/json` endpoint |
+| `login` | The three login steps and exactly what Arbor answers. Start here if a login that works in a browser is refused |
 | `whoami` | **Start here when nothing works.** Proves whether Arbor considers the session logged in, then tries each homepage and endpoint |
 
 `whoami` exists because every portal route answers an unauthenticated request

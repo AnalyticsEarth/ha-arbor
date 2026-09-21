@@ -36,6 +36,34 @@ class TestProbeToolLoads(unittest.TestCase):
         self.assertTrue(hasattr(self.probe, "UrllibArborClient"))
         self.assertTrue(hasattr(self.probe, "ArborScraper"))
 
+    def test_login_command_is_available(self) -> None:
+        # The one that shows why credentials a browser accepts are refused here.
+        self.assertIn("login", self.probe.COMMANDS)
+
+    def test_a_login_response_keeps_its_reason_but_loses_its_secrets(self) -> None:
+        redacted = self.probe.protocol.redact_login_response(
+            {
+                "items": [
+                    {
+                        "session_id": "abc123",
+                        "jwt": "ey.secret",
+                        "logged_in": False,
+                        "login_form_message": "Your account has been locked.",
+                    }
+                ]
+            }
+        )
+        item = redacted["items"][0]
+        self.assertEqual(item["session_id"], "<redacted>")
+        self.assertEqual(item["jwt"], "<redacted>")
+        self.assertEqual(item["login_form_message"], "Your account has been locked.")
+
+    def test_the_school_search_dump_omits_school_names(self) -> None:
+        trimmed = self.probe._without_school_names(
+            {"payload": [{"name": "A School", "postalCode": "X1 1XX", "sisUrl": "a.example"}]}
+        )
+        self.assertEqual(trimmed["payload"], [{"sisUrl": "a.example"}])
+
     def test_shapes_command_is_available(self) -> None:
         # One command to dump every scraped page, rather than many `shape` runs.
         self.assertIn("shapes", self.probe.COMMANDS)

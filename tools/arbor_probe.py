@@ -145,6 +145,20 @@ class UrllibArborClient:
         return self._base_url
 
     @property
+    def email(self) -> str:
+        return self._email
+
+    @property
+    def password(self) -> str:
+        return self._password
+
+    def request_raw(self, request: Any) -> tuple[int, str]:
+        """Make one protocol request and return its status and body verbatim."""
+        return self._request(
+            request.method, request.url, request.body, request.headers
+        )
+
+    @property
     def cookies(self) -> list[Any]:
         """Cookies held, for diagnosis. Names and domains only are ever shown."""
         return list(self._jar)
@@ -595,6 +609,99 @@ async def cmd_json(client: UrllibArborClient, args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_login(client: UrllibArborClient, args: argparse.Namespace) -> int:
+    """Walk the three login steps, printing exactly what Arbor answers.
+
+    When credentials that work in a browser are refused here, the reason is in
+    Arbor's own response and nowhere else. Secrets are stripped; the messages
+    that explain a refusal are not personal data.
+    """
+    print("step 1: POST /applications/search-by-email")
+    request = protocol.school_search_request(client.email, client.password)
+    for name in sorted(request.headers):
+        if name.lower() != "content-type":
+            print(f"    {name}: {request.headers[name]}")
+    status, body = client.request_raw(request)
+    print(f"  -> HTTP {status}, {len(body)} bytes")
+    payload = _safe_json(body)
+    if payload is None:
+        print(f"  -> not JSON. First 300 characters:\n{body[:300]}")
+        return 1
+    schools = payload.get("payload") if isinstance(payload, dict) else None
+    print(f"  -> schools returned: {len(schools) if isinstance(schools, list) else 0}")
+    print(_fmt(protocol.redact_login_response(_without_school_names(payload))))
+    if not schools:
+        print(
+            "\n  Arbor returned no school, which is how it reports credentials it "
+            "does not accept at this step.",
+            file=sys.stderr,
+        )
+        return 3
+
+    base_url = client.base_url or protocol.normalise_base_url(
+        str(schools[0].get("sisUrl"))
+    )
+    print(f"\nstep 2: POST {base_url}/auth/login")
+    status, body = client.request_raw(
+        protocol.login_request(base_url, client.email, client.password)
+    )
+    print(f"  -> HTTP {status}, {len(body)} bytes")
+    payload = _safe_json(body)
+    if payload is None:
+        print(f"  -> not JSON. First 300 characters:\n{body[:300]}")
+        return 1
+    print(_fmt(protocol.redact_login_response(payload)))
+
+    items = payload.get("items") if isinstance(payload, dict) else None
+    first = items[0] if isinstance(items, list) and items else {}
+    if not (isinstance(first, dict) and first.get("logged_in") is True):
+        print(
+            f"\n  Refused: {protocol.login_rejection_reason(payload)}\n"
+            "  The JSON above is what Arbor said; send it as printed.",
+            file=sys.stderr,
+        )
+        return 3
+
+    print("\nstep 3: GET /?session=... (cookie handshake)")
+    status, _ = client.request_raw(
+        protocol.HttpRequest(
+            "GET",
+            protocol.session_handshake_url(base_url, str(first["session_id"])),
+            None,
+            {"User-Agent": protocol.USER_AGENT},
+        )
+    )
+    print(f"  -> HTTP {status}")
+    print("  cookies: " + (
+        ", ".join(f"{c.name}@{c.domain}" for c in client.cookies) or "(none)"
+    ))
+    print("\nLogin completed.")
+    return 0
+
+
+def _safe_json(body: str) -> Any:
+    try:
+        return json.loads(strip_json_prefix(body))
+    except ValueError:
+        return None
+
+
+def _without_school_names(payload: Any) -> Any:
+    """Keep a school-search response's shape without listing the schools."""
+    if not isinstance(payload, dict):
+        return payload
+    trimmed = dict(payload)
+    entries = trimmed.get("payload")
+    if isinstance(entries, list):
+        trimmed["payload"] = [
+            {key: value for key, value in entry.items() if key in ("sisUrl",)}
+            if isinstance(entry, dict)
+            else entry
+            for entry in entries
+        ]
+    return trimmed
+
+
 async def cmd_whoami(client: UrllibArborClient, args: argparse.Namespace) -> int:
     """Establish a session and prove whether Arbor considers it logged in.
 
@@ -677,6 +784,7 @@ def _summarise(tree: Any) -> str:
 
 
 COMMANDS = {
+    "login": cmd_login,
     "report": cmd_report,
     "shapes": cmd_shapes,
     "pages": cmd_pages,
@@ -702,6 +810,7 @@ def build_parser() -> argparse.ArgumentParser:
             "shapes: the structure of every page a scrape reads. "
             "shape: one page's structure. "
             "json: one /format/json endpoint. "
+            "login: the three login steps and exactly what Arbor answers. "
             "whoami: login plus the dashboard."
         ),
     )

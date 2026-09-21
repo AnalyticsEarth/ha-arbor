@@ -36,6 +36,18 @@ USER_AGENT = (
 #: Cookie names that mean a portal session has been established.
 SESSION_COOKIE_NAMES = ("mis", "PHPSESSID", "arbor_session")
 
+# The browser posts both login steps from the central login page, so it sends an
+# Origin and a Referer. Ours sent neither. These are what the real client sends,
+# not an attempt to look like something we are not.
+LOGIN_HEADERS = {
+    "Content-Type": JQUERY_CONTENT_TYPE,
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "X-Requested-With": "XMLHttpRequest",
+    "Origin": ARBOR_LOGIN_HOST,
+    "Referer": f"{ARBOR_LOGIN_HOST}/",
+}
+
 PAGE_HEADERS = {
     "User-Agent": USER_AGENT,
     "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -59,7 +71,7 @@ def school_search_request(email: str, password: str) -> HttpRequest:
         method="POST",
         url=f"{ARBOR_LOGIN_HOST}{SCHOOL_SEARCH_PATH}",
         body=json.dumps({"email": email, "password": password}),
-        headers={"Content-Type": JQUERY_CONTENT_TYPE, "User-Agent": USER_AGENT},
+        headers=dict(LOGIN_HEADERS),
     )
 
 
@@ -113,7 +125,7 @@ def login_request(base_url: str, email: str, password: str) -> HttpRequest:
         method="POST",
         url=f"{base_url}{AUTH_LOGIN_PATH}?lang=en",
         body=json.dumps({"items": [{"username": email, "password": password}]}),
-        headers={"Content-Type": JQUERY_CONTENT_TYPE, "User-Agent": USER_AGENT},
+        headers=dict(LOGIN_HEADERS),
     )
 
 
@@ -180,6 +192,29 @@ def login_rejection_reason(data: Any) -> str:
         )
 
     return "Arbor rejected the email address or password"
+
+
+#: Login-response fields that are a secret rather than a diagnosis.
+SECRET_LOGIN_FIELDS = ("session_id", "jwt", "token", "stripePublishableKey")
+
+
+def redact_login_response(data: Any) -> Any:
+    """A login response with its secrets removed but its reasons intact.
+
+    The reason a login was refused lives in strings such as
+    ``login_form_message``, which are not personal data, so a response can be
+    shared for diagnosis once the session id and any token are taken out.
+    """
+    if isinstance(data, dict):
+        return {
+            key: "<redacted>"
+            if key in SECRET_LOGIN_FIELDS and value
+            else redact_login_response(value)
+            for key, value in data.items()
+        }
+    if isinstance(data, list):
+        return [redact_login_response(item) for item in data]
+    return data
 
 
 def session_handshake_url(base_url: str, session_id: str) -> str:

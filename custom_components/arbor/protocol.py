@@ -151,12 +151,62 @@ def parse_login(body: str, status: int) -> str:
     if not data.get("success") or not (
         isinstance(first, dict) and first.get("logged_in") is True
     ):
-        raise ArborAuthError(login_rejection_reason(data))
+        reason = login_rejection_reason(data)
+        # Test Arbor's own wording, never our generated advice: the lockout text
+        # below mentions "too many attempts" and would otherwise read as a
+        # throttle, turning "reset your password" into "wait and retry".
+        arbor_said = arbor_message(data)
+        if arbor_said and is_rate_limited(arbor_said):
+            # Not a credential problem: the password may be perfectly good and
+            # the caller should wait, not ask the user to re-enter it.
+            raise ArborConnectionError(reason)
+        raise ArborAuthError(reason)
 
     session_id = first.get("session_id")
     if not session_id:
         raise ArborConnectionError("Arbor logged in but returned no session id")
     return str(session_id)
+
+
+# Wording Arbor uses when it is throttling rather than rejecting credentials.
+_RATE_LIMIT_PHRASES = (
+    "exceeded the limit",
+    "too many",
+    "try again in",
+    "rate limit",
+    "temporarily blocked",
+    "please wait",
+)
+
+
+def is_rate_limited(message: str) -> bool:
+    """Whether a refusal is Arbor throttling rather than bad credentials.
+
+    Arbor returns both as ``success: false``, so only the wording separates
+    them. Getting this wrong means telling someone their password is wrong when
+    it is not, and inviting the retries that caused the throttle.
+    """
+    lowered = message.casefold()
+    return any(phrase in lowered for phrase in _RATE_LIMIT_PHRASES)
+
+
+def arbor_message(data: Any) -> str | None:
+    """The message Arbor itself returned with a refusal, if it gave one."""
+    items = data.get("items") if isinstance(data, dict) else None
+    first = items[0] if isinstance(items, list) and items else {}
+    if not isinstance(first, dict):
+        first = {}
+    action_params = data.get("action_params") if isinstance(data, dict) else None
+
+    for candidate in (
+        first.get("login_form_message"),
+        first.get("message"),
+        action_params.get("message") if isinstance(action_params, dict) else None,
+        data.get("message") if isinstance(data, dict) else None,
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
 
 
 def login_rejection_reason(data: Any) -> str:
@@ -168,22 +218,13 @@ def login_rejection_reason(data: Any) -> str:
     locked. Discarding that turned "your account is locked" into "check your
     password", which is the opposite of the right advice.
     """
+    if (message := arbor_message(data)) is not None:
+        return f"Arbor refused the login: {message}"
+
     items = data.get("items") if isinstance(data, dict) else None
     first = items[0] if isinstance(items, list) and items else {}
     if not isinstance(first, dict):
         first = {}
-
-    for candidate in (
-        first.get("login_form_message"),
-        first.get("message"),
-        (data.get("action_params") or {}).get("message")
-        if isinstance(data, dict) and isinstance(data.get("action_params"), dict)
-        else None,
-        data.get("message") if isinstance(data, dict) else None,
-    ):
-        if isinstance(candidate, str) and candidate.strip():
-            return f"Arbor refused the login: {candidate.strip()}"
-
     if first.get("login_form_enabled") is False:
         return (
             "Arbor has disabled the login form for this account, which usually means "

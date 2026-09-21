@@ -968,18 +968,26 @@ def main(argv: list[str] | None = None) -> int:
     except ArborAuthError as err:
         print(
             f"\nauthentication failed: {err}\n\n"
-            "Check the password before retrying: Arbor locks an account after a few\n"
-            "failed attempts, and it answers a throttled login the same way it answers\n"
-            "a wrong one, so repeated guesses are worth avoiding.\n\n"
-            "To type it once per terminal instead of once per run, without putting it\n"
-            "in your shell history:\n"
-            "    read -rs ARBOR_PASSWORD && export ARBOR_PASSWORD",
+            "Arbor is reporting the credentials themselves as wrong. Check the\n"
+            "password -- and check it is the password for the right school, since\n"
+            "each Arbor school is a separate account even under one email address.",
             file=sys.stderr,
         )
         return 3
     except ArborNotAvailableError as err:
         print(f"\nnot available: {err}", file=sys.stderr)
         return 4
+    except ArborConnectionError as err:
+        if protocol.is_rate_limited(str(err)):
+            print(
+                f"\n{err}\n\n"
+                "That is a rate limit, not a password problem. Wait a couple of\n"
+                "minutes and run the same command again.",
+                file=sys.stderr,
+            )
+            return 5
+        print(f"\nconnection problem: {err}", file=sys.stderr)
+        return 5
     except ArborError as err:
         print(f"\nerror: {err}", file=sys.stderr)
         return 1

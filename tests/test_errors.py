@@ -253,12 +253,13 @@ class TestLoginRejectionReason(unittest.TestCase):
                 "items": [
                     {
                         "logged_in": False,
-                        "login_form_message": "Too many failed attempts.",
+                        "login_form_message": "The username or password you entered "
+                        "is incorrect.",
                     }
                 ],
             }
         )
-        self.assertIn("Too many failed attempts.", reason)
+        self.assertIn("is incorrect", reason)
 
     def test_a_disabled_form_reads_as_a_lockout(self) -> None:
         reason = self._reason(
@@ -266,6 +267,47 @@ class TestLoginRejectionReason(unittest.TestCase):
         )
         self.assertIn("locked", reason)
         self.assertIn("rather than retrying", reason)
+
+    def test_a_rate_limit_is_not_a_credential_failure(self) -> None:
+        """Arbor's own words, verbatim, from a live account.
+
+        Reporting this as an authentication failure tells someone their password
+        is wrong when it is not, and in Home Assistant it would count towards
+        prompting them to re-enter a password that was always correct.
+        """
+        import json
+
+        payload = {
+            "success": False,
+            "items": [
+                {
+                    "logged_in": False,
+                    "message": "You've exceeded the limit for unsuccessful logins. "
+                    "Please try again in a couple of minutes.",
+                }
+            ],
+        }
+        with self.assertRaises(errors.ArborConnectionError) as caught:
+            self.protocol.parse_login(json.dumps(payload), 200)
+        self.assertNotIsInstance(caught.exception, errors.ArborAuthError)
+        self.assertIn("exceeded the limit", str(caught.exception))
+
+    def test_throttle_wording_is_recognised(self) -> None:
+        for message in (
+            "You've exceeded the limit for unsuccessful logins.",
+            "Too many attempts, please try again later.",
+            "Please try again in a couple of minutes.",
+            "You have hit the rate limit.",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(self.protocol.is_rate_limited(message))
+
+    def test_a_wrong_password_is_not_read_as_a_throttle(self) -> None:
+        self.assertFalse(
+            self.protocol.is_rate_limited(
+                "The username or password you entered is incorrect."
+            )
+        )
 
     def test_a_message_in_action_params_is_found(self) -> None:
         reason = self._reason(
@@ -283,3 +325,42 @@ class TestLoginRejectionReason(unittest.TestCase):
             200,
         )
         self.assertEqual(session, "abc123")
+
+
+class TestLockoutIsNotAThrottle(unittest.TestCase):
+    """A lockout and a throttle need opposite advice, and read similarly."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from _loader import load
+
+        cls.protocol = load("protocol")
+
+    def test_a_disabled_form_stays_an_auth_failure(self) -> None:
+        """Regression: the advice text tripped the throttle check.
+
+        "Reset the password rather than retrying" mentions "too many attempts",
+        so matching against our own wording turned a lockout into "wait and try
+        again" -- advice that would never resolve it.
+        """
+        import json
+
+        with self.assertRaises(errors.ArborAuthError):
+            self.protocol.parse_login(
+                json.dumps(
+                    {
+                        "success": True,
+                        "items": [{"logged_in": False, "login_form_enabled": False}],
+                    }
+                ),
+                200,
+            )
+
+    def test_only_arbors_own_message_is_examined(self) -> None:
+        self.assertIsNone(self.protocol.arbor_message({"success": False}))
+        self.assertEqual(
+            self.protocol.arbor_message(
+                {"items": [{"message": "You've exceeded the limit."}]}
+            ),
+            "You've exceeded the limit.",
+        )

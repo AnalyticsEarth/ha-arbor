@@ -125,6 +125,23 @@ at all.
 Refusals are remembered for the rest of the day so they are not re-requested on
 every refresh, with date segments masked so the key survives midnight.
 
+### A refused login: three different things, one status
+
+`/auth/login` answers all of these with HTTP 200 and `success: false`, and only
+the message separates them. Observed verbatim from a live account:
+
+| Arbor says | Means | Right response |
+| --- | --- | --- |
+| "The username or password you entered is incorrect..." | wrong credentials | check the password, **and the school** |
+| "You've exceeded the limit for unsuccessful logins. Please try again in a couple of minutes." | throttled | wait; the password may be perfectly good |
+| `login_form_enabled: false` | locked | reset the password; retrying will not help |
+
+Only the first is an authentication failure. A throttle is transient, so it must
+not count towards prompting the user to re-enter a password that was always
+correct. The wording is matched against **Arbor's own message**, never against
+our generated advice -- the lockout text mentions "too many attempts" and would
+otherwise be misread as a throttle.
+
 ### A refused page is HTTP 200 with a JSON error
 
 A page the account may not see comes back `200` with

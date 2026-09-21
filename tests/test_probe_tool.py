@@ -113,15 +113,18 @@ class TestProbeToolIsPrivateByDefault(unittest.TestCase):
         self.assertEqual(self.probe._mask_name("Amelia Example", False), "A… E…")
         self.assertEqual(self.probe._mask_name("Amelia Example", True), "Amelia Example")
 
-    def test_the_auth_failure_path_warns_about_lockout(self) -> None:
-        """Arbor answers a throttled login the same way as a wrong password.
+    def test_the_two_refusals_give_different_advice(self) -> None:
+        """A wrong password and a rate limit need opposite advice.
 
         Checked against the source rather than by running main(), which would
-        prompt for a password and block.
+        need a live login.
         """
         source = Path(self.probe.__file__ or "").read_text()
-        self.assertIn("locks an account", source)
-        self.assertIn("read -rs ARBOR_PASSWORD", source)
+        # Wrong password: check it, and check it is for the right school.
+        self.assertIn("separate account even under one email", source)
+        # Rate limit: wait, do not touch the password.
+        self.assertIn("not a password problem", source)
+        self.assertIn("is_rate_limited", source)
 
     def test_the_keychain_is_only_ever_read(self) -> None:
         """The user stores the password; the script must never write it."""

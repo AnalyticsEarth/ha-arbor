@@ -205,6 +205,10 @@ class StudentData:
     profile_url: str | None = None
     year_group: str | None = None
     form_group: str | None = None
+    #: The school's house or vertical group, where it has them.
+    house: str | None = None
+    #: The form tutor named on the child's own profile panel.
+    tutor: str | None = None
     photo_url: str | None = None
 
     attendance: AttendanceSummary = field(default_factory=AttendanceSummary)

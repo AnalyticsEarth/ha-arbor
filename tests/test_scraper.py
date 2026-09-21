@@ -418,7 +418,8 @@ class TestAssignmentAndBehaviourDetail(unittest.IsolatedAsyncioTestCase):
         self.portal = FakePortal(
             {
                 "/guardians/home-ui/dashboard": pages.SINGLE_CHILD_DASHBOARD,
-                "/guardians/student-profile/index/student-id/40219": pages.PROFILE_PAGE,
+                # Deliberately no page carrying a "Year group" label: Wrotham has
+                # none, and the bare-labelled profile panel is the only source.
                 "/guardians/assignments/index/student-id/40219": (
                     pages.ASSIGNMENTS_DUE_SECTION
                 ),
@@ -431,6 +432,7 @@ class TestAssignmentAndBehaviourDetail(unittest.IsolatedAsyncioTestCase):
                 "/guardians/behaviour/index/student-id/40219": (
                     pages.BEHAVIOUR_INCIDENT_BREAKDOWN
                 ),
+                "/guardians/student-ui/overview/id/40219": pages.STUDENT_PROFILE_PANEL,
                 "/auth/current-user-settings/format/json": pages.CURRENT_USER_SETTINGS,
             }
         )
@@ -473,6 +475,17 @@ class TestAssignmentAndBehaviourDetail(unittest.IsolatedAsyncioTestCase):
     def test_behaviour_totals_say_which_period_they_cover(self) -> None:
         self.assertEqual(self.student.behaviour_totals["positive"]["Autumn"], 35.0)
         self.assertEqual(self.student.behaviour_totals["positive"]["Lifetime"], 129.0)
+
+    def test_the_profile_panel_is_read_wherever_it_was_loaded(self) -> None:
+        """Arbor loads the Form/Year/House/Tutor panel as content of other pages.
+
+        Reading it only from the page discovery called the profile reported no
+        year group at a school whose profile panel states it plainly.
+        """
+        self.assertEqual(self.student.year_group, "9")
+        self.assertEqual(self.student.form_group, "9X1")
+        self.assertEqual(self.student.house, "Wimbledon")
+        self.assertEqual(self.student.tutor, "Miss Blamire")
 
     def test_behaviour_counts_as_sourced_without_a_kpi_endpoint(self) -> None:
         self.assertIn("behaviour", self.student.sourced_domains)

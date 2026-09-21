@@ -1002,6 +1002,11 @@ BEHAVIOUR_INCIDENT_BREAKDOWN = {
                     "props": {"title": "Neutral Incidents"},
                     "content": [_incident_totals("neutral", 2, 0, 0)],
                 },
+                # The profile panel, loaded as content of this page.
+                {
+                    "xtype": "mis-button-load-page",
+                    "props": {"pageUrl": "/guardians/student-ui/overview/id/40219"},
+                },
             ],
         }
     ],
@@ -1114,6 +1119,32 @@ ASSIGNMENTS_DUE_SECTION = {
                         }
                     ],
                 },
+            ],
+        }
+    ],
+}
+
+
+# Arbor's own profile panel, which it loads as *content* of whichever page linked
+# to it rather than serving on the profile page alone. Labels are bare: "Year",
+# not "Year group".
+STUDENT_PROFILE_PANEL = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "mis-section",
+            "props": {"title": "Alexander Example"},
+            "content": [
+                {
+                    "xtype": "mis-property-row",
+                    "props": {"fieldLabel": label, "value": value},
+                }
+                for label, value in (
+                    ("Form", "9X1"),
+                    ("Year", "9"),
+                    ("House", "Wimbledon"),
+                    ("Tutor", "Miss Blamire"),
+                )
             ],
         }
     ],

@@ -318,6 +318,34 @@ Two consequences worth stating plainly:
   from the same teacher, in the same lesson are two incidents. Deduplicating
   property rows by content undercounted a term by four.
 
+### No behaviour points are published to a guardian
+
+Worth stating because it looks like a gap in this integration and is not. At
+Wrotham the guardian portal publishes behaviour **types** and **incident counts**
+and no points at all:
+
+- the KPI tile is captioned "Positive Behavioural Incidents - this term", value
+  `35`, with no unit;
+- the behaviour page's totals read "35 positive incidents";
+- each incident row's payload has exactly two fields, `fieldLabel` (the date) and
+  `value` (the four labelled fields), with no numeric field hidden behind them;
+- nothing anywhere in the behaviour payload mentions a point;
+- the guardian main menu has four items, and the whole guardian navigation — 20
+  entries — has no rewards or points page. Neither the Top-Ups dashboard nor the
+  school shop mentions one.
+
+So `points` stays `None` on each incident rather than being inferred. A school
+that does publish them is still read: `_POINTS_RE` matches only a number the text
+itself calls a point, and the sign comes from the section heading.
+
+### Pages a guardian is offered that this integration does not read
+
+From the subnav of any per-child page: Trips, Report Cards, Attendance By Date,
+Active Payments, Invoices, Top-Ups, Credit Notes and the school shop (Products).
+Report cards are listed with a title, a date and a link, but the card body is not
+served as JSON — its only content URL is the child's profile — so the contents are
+not reachable this way.
+
 The calendar feed returns **today only**. A date range presumably narrows it, but
 that has not been established, so the timetable covers the current day.
 

@@ -218,6 +218,8 @@ def _summary_attrs(student: StudentData) -> dict[str, Any]:
         "student_id": student.student_id,
         "year_group": student.year_group,
         "form_group": student.form_group,
+        "house": student.house,
+        "tutor": student.tutor,
         "attendance_percentage": student.attendance.percentage,
         "attendance": _attendance_attrs(student),
         "behaviour_points": student.behaviour_points_net,

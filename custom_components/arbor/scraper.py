@@ -464,11 +464,18 @@ class ArborScraper:
                 self._log.debug("Resolved child %s to a name from page data", student.student_id)
                 student.name = named
 
-        fields = extract_profile_fields(profile_trees)
+        # Every page read for this child, not just the one discovery called the
+        # profile. Arbor's own profile panel -- Form, Year, House, Tutor -- is
+        # loaded as *content* of whichever page linked to it, so restricting this
+        # to the profile page reported no year group at a school that states it
+        # plainly.
+        fields = extract_profile_fields([*profile_trees, *student.raw.values()])
         student.year_group = _field(fields, "year group", "year", "national curriculum year")
         student.form_group = _field(
             fields, "form group", "form", "registration group", "tutor group"
         )
+        student.house = _field(fields, "house", "vertical group")
+        student.tutor = _field(fields, "tutor", "form tutor")
 
         if not student.assignments:
             student.empty_domains.add(DATA_ASSIGNMENTS)

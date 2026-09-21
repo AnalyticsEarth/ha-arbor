@@ -610,6 +610,7 @@ def report(data: Any, show_values: bool) -> None:
         print(f"\n── {_mask_name(student.name, show_values)}  (id {student.student_id})")
         print(f"   year group        {student.year_group or '-'}")
         print(f"   form group        {student.form_group or '-'}")
+        print(f"   house / tutor     {student.house or '-'} / {student.tutor or '-'}")
         print(f"   attendance        {_or_dash(student.attendance.percentage, '%')}")
         print(f"   behaviour net     {_or_dash(student.behaviour_points_net)}")
         print(

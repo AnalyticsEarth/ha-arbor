@@ -25,6 +25,7 @@ from typing import Any
 from .models import (
     AccountBalance,
     Assignment,
+    AttendanceMark,
     AttendanceSummary,
     BehaviourIncident,
     Grade,
@@ -591,10 +592,26 @@ def parse_percentage(value: Any) -> float | None:
     return number
 
 
+# A path or URL, which is never a monetary amount however many digits it holds.
+_PATH_LIKE_RE = re.compile(r"^(?:[a-z][a-z0-9+.-]*:)?//|^/|/\S*/", re.IGNORECASE)
+
+
+def looks_like_path(text: str) -> bool:
+    """Whether *text* is a URL or a portal path rather than a value."""
+    return bool(_PATH_LIKE_RE.search(text.strip()))
+
+
 def parse_currency(value: Any) -> float | None:
-    """A monetary amount, handling ``-£1.50``, ``£-1.50`` and ``(£1.50)``."""
+    """A monetary amount, handling ``-£1.50``, ``£-1.50`` and ``(£1.50)``.
+
+    Falls back to a bare number for schools that print a balance without a
+    symbol -- but never for a path. Arbor's account filters are links whose
+    caption is "Meals" and whose value is
+    ``/guardians/customer-account-ui/top-ups-dashboard/student-id/1879/...``,
+    and reading a number out of that reported the child's id as £1879.
+    """
     text = text_of(value)
-    if not text:
+    if not text or looks_like_path(text):
         return None
     signed = _SIGNED_CURRENCY_RE.search(text)
     if signed:
@@ -1097,6 +1114,38 @@ class Kpi:
 
     title: str
     text: str
+    #: The figures the tile compares the headline against, by Arbor's captions:
+    #: ``{"Year": "100%", "Last 4 weeks": "100%"}`` or ``{"Last term": "32 incidents"}``.
+    comparisons: dict[str, str] = field(default_factory=dict)
+
+
+# Each comparison on a KPI tile is its own "...-barchart-chart" block. The
+# attendance tile puts the figure in a bar's title and the caption in a <label>;
+# the behaviour tile has no bar and writes "Last term: 32 incidents" in the label.
+_KPI_CHART_SPLIT_RE = re.compile(r'(?=class="[^"]*barchart-chart")')
+_KPI_LABEL_RE = re.compile(r"<label[^>]*>(.*?)</label>", re.IGNORECASE | re.DOTALL)
+_KPI_BAR_TITLE_RE = re.compile(r'title="([^"]*)"', re.IGNORECASE)
+
+
+def parse_kpi_comparisons(value: Any) -> dict[str, str]:
+    """The secondary figures on a KPI tile, by caption."""
+    if not isinstance(value, str):
+        return {}
+    comparisons: dict[str, str] = {}
+    for chunk in _KPI_CHART_SPLIT_RE.split(value)[1:]:
+        match = _KPI_LABEL_RE.search(chunk)
+        if match is None:
+            continue
+        caption = strip_html(match.group(1))
+        if not caption:
+            continue
+        if (bar := _KPI_BAR_TITLE_RE.search(chunk)) is not None:
+            comparisons.setdefault(caption, strip_html(bar.group(1)))
+            continue
+        head, separator, tail = caption.partition(":")
+        if separator and tail.strip():
+            comparisons.setdefault(head.strip(), tail.strip())
+    return comparisons
 
 
 def extract_kpis(trees: list[Any]) -> list[Kpi]:
@@ -1117,8 +1166,48 @@ def extract_kpis(trees: list[Any]) -> list[Kpi]:
             if not title or not html or title in seen:
                 continue
             seen.add(title)
-            kpis.append(Kpi(title=title, text=html))
+            kpis.append(
+                Kpi(
+                    title=title,
+                    text=html,
+                    comparisons=parse_kpi_comparisons(fields["html"].get("value"))
+                    if isinstance(fields.get("html"), dict)
+                    else {},
+                )
+            )
     return kpis
+
+
+def attendance_periods_from_kpis(kpis: list[Kpi]) -> dict[str, float]:
+    """Attendance percentages by the period captions the KPI tile compares."""
+    periods: dict[str, float] = {}
+    for kpi in kpis:
+        if "attendance" not in kpi.title.casefold():
+            continue
+        for caption, value in kpi.comparisons.items():
+            if (percentage := parse_percentage(value)) is not None:
+                periods.setdefault(caption, percentage)
+    return periods
+
+
+def behaviour_periods_from_kpis(kpis: list[Kpi]) -> dict[str, dict[str, float]]:
+    """Incident counts by polarity and the period captions the KPI tile compares.
+
+    The tile is the only source of the previous term's figure; the behaviour page
+    states this term, this year and the child's lifetime but not last term.
+    """
+    periods: dict[str, dict[str, float]] = {}
+    for kpi in kpis:
+        title = kpi.title.casefold()
+        if "behaviour" not in title and "behavior" not in title:
+            continue
+        polarity = next((word for word in _POLARITIES if word in title), None)
+        if polarity is None:
+            continue
+        for caption, value in kpi.comparisons.items():
+            if (count := parse_number(value)) is not None:
+                periods.setdefault(polarity, {}).setdefault(caption, abs(count))
+    return periods
 
 
 def attendance_from_kpis(kpis: list[Kpi]) -> float | None:
@@ -1312,13 +1401,16 @@ def extract_section_rows(trees: list[Any]) -> list[SectionRow]:
     achievements by four.
     """
     rows: list[SectionRow] = []
-    seen: set[tuple[str, str, str, str | None, int]] = set()
+    seen: set[tuple[str, str, str, str | None, str | None, int]] = set()
     for tree in trees:
-        occurrences: Counter[tuple[str, str, str, str | None]] = Counter()
+        occurrences: Counter[tuple[str, str, str, str | None, str | None]] = Counter()
         for row in _iter_section_rows(tree):
-            if not row.text:
+            # An attendance mark's value is a coloured icon, which renders to
+            # nothing; the mark itself is in the description. Requiring text
+            # here discarded 24 of a term's 28 registration sessions.
+            if not row.text and not row.description:
                 continue
-            key = (row.section, row.subsection, row.text, row.label)
+            key = (row.section, row.subsection, row.text, row.label, row.description)
             occurrences[key] += 1
             composite = (*key, occurrences[key])
             if composite in seen:
@@ -1569,6 +1661,84 @@ def extract_behaviour_incidents(rows: list[SectionRow]) -> list[BehaviourInciden
     return incidents
 
 
+# "21 Sep 2026 AM" -- the date and which of the day's two registers.
+_SESSION_LABEL_RE = re.compile(
+    r"^(?P<date>.+?)\s+(?P<session>AM|PM|Morning|Afternoon)\s*$", re.IGNORECASE
+)
+
+
+def extract_attendance_marks(rows: list[SectionRow]) -> list[AttendanceMark]:
+    """Every registration session on the Attendance By Date page.
+
+    The row's label is the date and register, its description is the mark in the
+    school's own words, and its value is a code where Arbor printed one. The
+    value is otherwise a coloured icon, so the description is the only readable
+    source for "present".
+    """
+    marks: list[AttendanceMark] = []
+    seen: set[tuple[str, str | None]] = set()
+    for row in rows:
+        if not row.label:
+            continue
+        match = _SESSION_LABEL_RE.match(row.label)
+        if match is None:
+            continue
+        on = parse_date(match.group("date"))
+        if on is None:
+            continue
+        session = match.group("session").upper()[:2]
+        key = (on.isoformat(), session)
+        if key in seen:
+            continue
+        seen.add(key)
+        # "-" is Arbor's placeholder for a register it has no mark for; the
+        # description says so in words, which is what gets kept.
+        code = row.text if row.text and row.text != "-" else None
+        marks.append(
+            AttendanceMark(
+                on=on,
+                session=session,
+                mark=row.description,
+                code=code,
+                week=row.section or None,
+            )
+        )
+    marks.sort(key=lambda item: (item.on, item.session or ""), reverse=True)
+    return marks
+
+
+def summarise_attendance_marks(marks: list[AttendanceMark]) -> dict[str, int]:
+    """How many sessions fall into each status, keyed by ``AttendanceMark.status``."""
+    return dict(Counter(mark.status for mark in marks))
+
+
+def attendance_from_marks(marks: list[AttendanceMark]) -> AttendanceSummary:
+    """A session-count summary derived from the individual marks.
+
+    The percentage is over sessions the school actually counts: a "Y" code means
+    the child could not attend and is excluded from the total, which is how 28
+    listed sessions produce a 24-session figure.
+    """
+    counts = summarise_attendance_marks(marks)
+    countable = sum(
+        count
+        for status, count in counts.items()
+        if status in ("present", "late", "authorised", "unauthorised")
+    )
+    present = counts.get("present", 0) + counts.get("late", 0)
+    summary = AttendanceSummary(
+        present_sessions=present,
+        authorised_absences=counts.get("authorised", 0),
+        unauthorised_absences=counts.get("unauthorised", 0),
+        late_sessions=counts.get("late", 0),
+    )
+    if countable:
+        summary.percentage = round(present / countable * 100, 2)
+    if marks:
+        summary.period = f"{min(m.on for m in marks)} to {max(m.on for m in marks)}"
+    return summary
+
+
 def extract_accounts_from_sections(rows: list[SectionRow]) -> list[AccountBalance]:
     """Balances shown as a dashboard row, e.g. description "Balance: £4.15"."""
     accounts: list[AccountBalance] = []
@@ -1629,6 +1799,10 @@ def extract_accounts(trees: list[Any]) -> list[AccountBalance]:
             if not any(
                 word in label for word in ("meal", "lunch", "balance", "account", "dinner", "credit")
             ):
+                continue
+            # A metric whose value is a link is one of Arbor's filters -- "Meals",
+            # "Autumn 2026" -- not a balance.
+            if looks_like_path(metric.value):
                 continue
             balance = parse_currency(metric.value)
             if balance is None:
@@ -1968,14 +2142,35 @@ def extract_student_name(trees: list[Any]) -> str | None:
     return None
 
 
+_SLUG_RE = re.compile(r"[/_-]+")
+
+
+def _path_words(url: str) -> str:
+    """A URL path as space-separated words, for the same keyword matching.
+
+    Captions are configured per school and can be as bare as "By Date"; the route
+    behind them -- ``/guardians/student-ui/attendance-by-date/`` -- is Arbor's and
+    says plainly what the page is.
+    """
+    return _SLUG_RE.sub(" ", url.split("?", 1)[0])
+
+
+def _first_domain(text: str, keywords: dict[str, tuple[str, ...]]) -> str | None:
+    """The first domain whose keywords *text* names."""
+    for domain, domain_keywords in keywords.items():
+        if any(caption_mentions(text, keyword) for keyword in domain_keywords):
+            return domain
+    return None
+
+
 def classify_pages(
     trees: list[Any], keywords: dict[str, tuple[str, ...]]
 ) -> dict[str, dict[str, str]]:
-    """Group discovered links into data domains by their caption.
+    """Group discovered links into data domains by their caption, then their URL.
 
     Returns ``{domain: {caption: url}}``. A link is filed under the first domain
-    whose keywords its caption names, so the caller can fetch only the pages the
-    school actually publishes.
+    its caption names, falling back to its path, so the caller can fetch only the
+    pages the school actually publishes.
     """
     found: dict[str, dict[str, str]] = {}
     for tree in trees:
@@ -1989,10 +2184,11 @@ def classify_pages(
             # Nor is a form for doing something.
             if caption.casefold().startswith(_ACTION_CAPTION_PREFIXES):
                 continue
-            for domain, domain_keywords in keywords.items():
-                if any(caption_mentions(caption, keyword) for keyword in domain_keywords):
-                    found.setdefault(domain, {}).setdefault(caption, link.url)
-                    break
+            domain = _first_domain(caption, keywords) or _first_domain(
+                _path_words(link.url), keywords
+            )
+            if domain is not None:
+                found.setdefault(domain, {}).setdefault(caption, link.url)
     return found
 
 

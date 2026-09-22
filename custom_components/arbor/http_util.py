@@ -6,6 +6,7 @@ aiohttp present.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 # Prefixes some servers use to make a JSON response non-executable as a script.
@@ -29,6 +30,19 @@ def looks_like_html(text: str) -> bool:
     """
     head = text.lstrip()[:200].casefold()
     return head.startswith("<!doctype") or head.startswith("<html")
+
+
+# Arbor answers an expired session on a ``/format/json`` endpoint with a
+# perfectly well-formed ``{"success": true, "items": [{"logged_in": false, ...}]}``
+# and a 200, so neither the status code nor the HTML check notices. The first
+# endpoint of a refresh is the one that gets hit, which silently cost the school
+# and guardian names every time a session timed out between updates.
+_LOGGED_OUT_RE = re.compile(r'"logged_in"\s*:\s*false', re.IGNORECASE)
+
+
+def says_logged_out(text: str) -> bool:
+    """Whether a JSON body states that the session is not authenticated."""
+    return bool(_LOGGED_OUT_RE.search(text))
 
 
 def normalise_base_url(raw: str) -> str:
@@ -91,7 +105,8 @@ def classify_response(status: int, body: str, *, retried: bool) -> str:
 
     The important distinction is between a dead *session* and a resource this
     account may not see. They look identical on the wire -- both a 403 and the
-    HTML shell -- but only the first is worth re-authenticating for.
+    HTML shell -- but only the first is worth re-authenticating for. A dead
+    session also has a third disguise: a 200 whose JSON says ``logged_in: false``.
 
     Logging in is what validates credentials: it returns ``logged_in: true`` and
     a session cookie or it fails outright. So once a fresh login has happened,
@@ -99,7 +114,7 @@ def classify_response(status: int, body: str, *, retried: bool) -> str:
     an authentication failure takes the whole integration down and asks the user
     to re-enter a password that was never wrong.
     """
-    if status in (401, 403) or looks_like_html(body):
+    if status in (401, 403) or looks_like_html(body) or says_logged_out(body):
         return RESPONSE_SESSION_STALE if not retried else RESPONSE_NOT_AVAILABLE
     if status == 404:
         return RESPONSE_NOT_AVAILABLE

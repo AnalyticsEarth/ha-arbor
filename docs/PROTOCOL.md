@@ -338,13 +338,72 @@ So `points` stays `None` on each incident rather than being inferred. A school
 that does publish them is still read: `_POINTS_RE` matches only a number the text
 itself calls a point, and the sign comes from the section heading.
 
+### Attendance By Date: one row per register
+
+`/guardians/student-ui/attendance-by-date/student-id/<id>` lists every
+registration session, grouped into weeks. Three things on the row matter:
+
+| Where | Holds |
+| --- | --- |
+| `props.fieldLabel` | the date and register: `21 Sep 2026 AM` |
+| `props.description` | the mark **in words**: `Present AM`, `No Mark`, `Any Other Unavoidable Cause` |
+| `props.value` | the code where there is one (`Y7`, `L`), otherwise a coloured **icon** or `-` |
+
+A present mark is drawn as a tick, so `value` flattens to no text at all. Any
+filter requiring a row to have text throws away almost every session — 24 of 28
+in a term here. The description is the readable source.
+
+The arithmetic is worth knowing: 28 listed sessions, minus two `Y7` and two
+unmarked, is the 24-session total the summary page states. A **Y code** means the
+child could not attend, and the session counts neither for them nor against them,
+so it belongs in neither the numerator nor the denominator.
+
+Marks can only be classified by the school's own wording, so anything
+unrecognised is kept verbatim with a status of `other` rather than guessed at.
+
+### KPI tiles state what they compare against
+
+Each tile in `/guardians/student/kpis/id/<id>/` carries secondary figures in its
+rendered HTML, one per `...-barchart-chart` block. Two shapes:
+
+- **attendance** — a bar whose `title` is the figure, and a sibling `<label>`
+  giving the caption: `Year` 100%, `Last 4 weeks` 96%;
+- **behaviour** — no bar, and the label reads `Last term: 32 incidents`.
+
+The previous term's figure is on the tile and nowhere else: the behaviour page
+states this term, this year and the child's lifetime, but not the one before.
+
+### A link is not a value
+
+Arbor renders a filter as a labelled row whose value is a path:
+
+```
+Meals -> /guardians/customer-account-ui/top-ups-dashboard/student-id/1879/customer-account-id/5964/term-id/40
+```
+
+`parse_currency` used to fall through to "any bare number", which reported the
+child's own id as a balance of £1879. It now refuses a path outright; the
+bare-number fallback survives only for schools that print a balance with no
+currency symbol.
+
+### Classifying a page by its route
+
+A caption is configured per school and can be as bare as "By Date". The route
+behind it is Arbor's own: `/guardians/student-ui/attendance-by-date/`.
+`classify_pages` matches the caption first and falls back to the path, which is
+how the by-date page is found at all.
+
 ### Pages a guardian is offered that this integration does not read
 
-From the subnav of any per-child page: Trips, Report Cards, Attendance By Date,
-Active Payments, Invoices, Top-Ups, Credit Notes and the school shop (Products).
-Report cards are listed with a title, a date and a link, but the card body is not
-served as JSON — its only content URL is the child's profile — so the contents are
-not reachable this way.
+From the subnav of any per-child page: Trips, Report Cards, Active Payments,
+Invoices, Credit Notes and the school shop (Products). Report cards are listed
+with a title, a date and a link, but the card body is not served as JSON — its
+only content URL is the child's profile — so the contents are not reachable this
+way.
+
+Those links live in `subNav.props.props.treeData.items[].fields`, which
+`find_links` does not walk, so they are not discovered from the navigation; the
+pages that do get read are the ones linked from a page's own body.
 
 The calendar feed returns **today only**. A date range presumably narrows it, but
 that has not been established, so the timetable covers the current day.

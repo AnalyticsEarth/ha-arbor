@@ -1149,3 +1149,131 @@ STUDENT_PROFILE_PANEL = {
         }
     ],
 }
+
+
+def _kpi_bar(caption: str, percentage: str) -> str:
+    """One comparison on the attendance tile: a bar plus its caption."""
+    return (
+        '<div class="mis-htmlpanel-measure-barchart-chart">'
+        '<div class="mis-htmlpanel-measure-barchart-chart-bar">'
+        f'<div class="mis-htmlpanel-measure-barchart-chart-bar-value" '
+        f'title="{percentage}">\n    {percentage}\n</div></div> '
+        f'<label class="mis-htmlpanel-measure-barchart-chart-label">{caption}</label>'
+        "</div>"
+    )
+
+
+def _kpi_line(text: str) -> str:
+    """One comparison on a behaviour tile: caption and figure in one label."""
+    return (
+        '<div class="mis-htmlpanel-measure-barchart-chart"> '
+        f'<label class="mis-htmlpanel-measure-barchart-chart-label">{text}</label></div>'
+    )
+
+
+def _kpi_tile(value: str, comparisons: str) -> str:
+    return (
+        '<div class="mis-htmlpanel-measure">'
+        f'<div class="mis-htmlpanel-measure-value">{value}</div>'
+        f'<div class="mis-htmlpanel-measure-barchart">{comparisons}</div></div>'
+    )
+
+
+# The KPI list as Arbor really renders it: each tile states the headline and the
+# figures it is being compared against. "Last term" appears nowhere else.
+STUDENT_KPIS_WITH_COMPARISONS = {
+    "success": True,
+    "items": [
+        {
+            "fields": {
+                "title": {"value": "Attendance (2026/2027)"},
+                "html": {
+                    "value": _kpi_tile(
+                        '100<span style="font-size:50%">%</span>',
+                        _kpi_bar("Year", "100%") + _kpi_bar("Last 4 weeks", "96%"),
+                    )
+                },
+                "url": {"value": "/guardians/student-ui/recent-attendance/student-id/40219"},
+            }
+        },
+        {
+            "fields": {
+                "title": {"value": "Positive Behavioural Incidents - this term"},
+                "html": {
+                    "value": _kpi_tile(
+                        "35",
+                        _kpi_line("This year: 35 incidents")
+                        + _kpi_line("Last term: 32 incidents"),
+                    )
+                },
+            }
+        },
+        {
+            "fields": {
+                "title": {"value": "Negative Behavioural Incidents - this term"},
+                "html": {
+                    "value": _kpi_tile(
+                        "0",
+                        _kpi_line("This year: 0 incidents")
+                        + _kpi_line("Last term: 1 incidents"),
+                    )
+                },
+            }
+        },
+    ],
+}
+
+
+def _session_row(label: str, value: str, description: str) -> dict:
+    return {
+        "xtype": "mis-property-row",
+        "props": {
+            "cls": " mis-property-row-tooltip",
+            "tooltipMIS": description,
+            "value": value,
+            "fieldLabel": label,
+            "description": description,
+        },
+    }
+
+
+# A tick, which is how Arbor renders a present mark. It flattens to no text at
+# all, so the description is the only readable source for the mark.
+_TICK = '<div><span style="color:#68aa22"><span class="mis-icon mis-icon-tick"/></span></div>'
+
+# The Attendance By Date page: one row per register, grouped by week.
+ATTENDANCE_BY_DATE_PAGE = {
+    "type": "page",
+    "content": [
+        {
+            "xtype": "mis-section",
+            "props": {"title": "20 Sep 2026 - 26 Sep 2026", "hiddenRowsCount": 0},
+            "content": [
+                _session_row("22 Sep 2026 AM", "<div>-</div>", "No Mark"),
+                _session_row("22 Sep 2026 PM", "<div>-</div>", "No Mark"),
+                _session_row("21 Sep 2026 AM", _TICK, "Present AM"),
+                _session_row("21 Sep 2026 PM", _TICK, "Present PM"),
+            ],
+        },
+        {
+            "xtype": "mis-section",
+            "props": {"title": "13 Sep 2026 - 19 Sep 2026", "hiddenRowsCount": 0},
+            "content": [
+                _session_row("18 Sep 2026 AM", "<div>L</div>", "Late (before registers closed)"),
+                _session_row("18 Sep 2026 PM", _TICK, "Present PM"),
+                _session_row("17 Sep 2026 AM", "<div>I</div>", "Illness"),
+                _session_row("17 Sep 2026 PM", "<div>O</div>", "Unauthorised Absence"),
+            ],
+        },
+        {
+            "xtype": "mis-section",
+            "props": {"title": "30 Aug 2026 - 05 Sep 2026", "hiddenRowsCount": 0},
+            "content": [
+                # A "Y" code: the child could not attend, and the session counts
+                # neither for nor against them.
+                _session_row("03 Sep 2026 AM", "<div>Y7</div>", "Any Other Unavoidable Cause"),
+                _session_row("03 Sep 2026 PM", "<div>Y7</div>", "Any Other Unavoidable Cause"),
+            ],
+        },
+    ],
+}

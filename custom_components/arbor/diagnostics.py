@@ -64,6 +64,17 @@ async def async_get_config_entry_diagnostics(
                         polarity: sorted(periods)
                         for polarity, periods in student.behaviour_totals.items()
                     },
+                    "attendance_sessions_listed": len(student.attendance_marks),
+                    "attendance_statuses": sorted(
+                        {mark.status for mark in student.attendance_marks}
+                    ),
+                    "attendance_marks_unclassified": sorted(
+                        {
+                            mark.mark
+                            for mark in student.attendance_marks
+                            if mark.status == "other" and mark.mark
+                        }
+                    ),
                     "counts": {
                         "assignments": len(student.assignments),
                         "behaviour_incidents": len(student.behaviour_incidents),

@@ -22,7 +22,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import ArborConfigEntry
 from .coordinator import ArborCoordinator
 from .entity import ArborStudentEntity
-from .models import Assignment, BehaviourIncident, Lesson, StudentData
+from .models import AttendanceMark, Assignment, BehaviourIncident, Lesson, StudentData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -142,15 +142,40 @@ class ArborSensorDescription(SensorEntityDescription):
     unit_fn: Callable[[StudentData], str | None] | None = None
 
 
+def _mark_attrs(items: list[AttendanceMark]) -> list[dict[str, Any]]:
+    return [
+        {
+            "date": item.on.isoformat(),
+            "session": item.session,
+            "mark": item.mark,
+            "code": item.code,
+            "status": item.status,
+            "absence": item.is_absence,
+        }
+        for item in items[:MAX_LIST_ATTRIBUTES]
+    ]
+
+
 def _attendance_attrs(student: StudentData) -> dict[str, Any]:
     summary = student.attendance
-    return {
+    marks = student.attendance_marks
+    attrs: dict[str, Any] = {
         "present_sessions": summary.present_sessions,
         "authorised_absences": summary.authorised_absences,
         "unauthorised_absences": summary.unauthorised_absences,
         "late_sessions": summary.late_sessions,
         "period": summary.period,
+        # What the school's own KPI tile compares: "Year", "Last 4 weeks".
+        "by_period": summary.by_period,
     }
+    if marks:
+        attrs |= {
+            "sessions_listed": len(marks),
+            "by_status": dict(Counter(item.status for item in marks).most_common()),
+            "absences": _mark_attrs([item for item in marks if item.is_absence]),
+            "sessions": _mark_attrs(marks),
+        }
+    return attrs
 
 
 def _next_lesson_value(student: StudentData) -> str | None:
@@ -222,6 +247,8 @@ def _summary_attrs(student: StudentData) -> dict[str, Any]:
         "tutor": student.tutor,
         "attendance_percentage": student.attendance.percentage,
         "attendance": _attendance_attrs(student),
+        "attendance_by_period": student.attendance.by_period,
+        "attendance_sessions": _mark_attrs(student.attendance_marks),
         "behaviour_points": student.behaviour_points_net,
         "positive_points": student.behaviour_points_positive,
         "negative_points": student.behaviour_points_negative,
@@ -409,6 +436,12 @@ class ArborSensor(ArborStudentEntity, SensorEntity):
             "behaviour_by_type",
             "behaviour_incidents",
             "behaviour_totals_by_period",
+            "absences",
+            "attendance_by_period",
+            "attendance_sessions",
+            "by_period",
+            "by_status",
+            "sessions",
             "by_staff",
             "by_subject",
             "by_type",

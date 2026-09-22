@@ -612,6 +612,19 @@ def report(data: Any, show_values: bool) -> None:
         print(f"   form group        {student.form_group or '-'}")
         print(f"   house / tutor     {student.house or '-'} / {student.tutor or '-'}")
         print(f"   attendance        {_or_dash(student.attendance.percentage, '%')}")
+        if student.attendance.by_period:
+            spans = "  ".join(
+                f"{period} {value:g}%" for period, value in student.attendance.by_period.items()
+            )
+            print(f"     {spans}")
+        if student.attendance_marks:
+            from collections import Counter as _Counter
+
+            counts = _Counter(mark.status for mark in student.attendance_marks)
+            print(
+                f"     {len(student.attendance_marks)} sessions listed: "
+                + "  ".join(f"{status} {count}" for status, count in counts.most_common())
+            )
         print(f"   behaviour net     {_or_dash(student.behaviour_points_net)}")
         print(
             f"     positive {_or_dash(student.behaviour_points_positive)}"
@@ -693,6 +706,22 @@ def _print_samples(student: Any) -> None:
             if details:
                 print(f"         {'  '.join(details)}")
         _print_behaviour_breakdown(student)
+    absences = [mark for mark in student.attendance_marks if mark.is_absence]
+    other = [
+        mark
+        for mark in student.attendance_marks
+        if mark.status not in ("present", "unmarked")
+    ]
+    if other:
+        print("   attendance sessions that are not a plain present:")
+        for mark in other[:12]:
+            print(
+                f"     · {mark.on} {mark.session}  {mark.mark or '-'}"
+                f"{f' [{mark.code}]' if mark.code else ''}"
+                f"{'  ABSENCE' if mark.is_absence else ''}"
+            )
+    elif student.attendance_marks and not absences:
+        print("   attendance sessions: every listed session is present or unmarked")
     if student.lessons:
         print("   sample lessons:")
         for item in student.lessons[:4]:

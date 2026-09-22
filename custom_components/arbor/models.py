@@ -140,6 +140,80 @@ class AttendanceSummary:
     unauthorised_absences: int | None = None
     late_sessions: int | None = None
     period: str | None = None
+    #: The percentages Arbor's own KPI tile compares, by its captions:
+    #: ``{"Year": 100.0, "Last 4 weeks": 100.0}``.
+    by_period: dict[str, float] = field(default_factory=dict)
+
+
+# Arbor writes the mark in the row's *description* -- "Present AM", "No Mark",
+# "Any Other Unavoidable Cause" -- because the value itself is a coloured icon.
+# Only the wording can be classified, so anything unrecognised is kept verbatim
+# under "other" rather than being guessed at.
+_PRESENT_WORDS = ("present", "attended")
+_LATE_WORDS = ("late",)
+_UNAUTHORISED_WORDS = ("unauthorised", "unauthorized", "truan")
+_AUTHORISED_WORDS = (
+    "authorised",
+    "authorized",
+    "illness",
+    "sick",
+    "medical",
+    "appointment",
+    "holiday",
+    "religious",
+    "bereavement",
+    "excluded",
+    "suspension",
+)
+_UNMARKED_WORDS = ("no mark", "not taken", "no register")
+# A "Y" code means the child could not attend and the session is not counted
+# either way -- which is why 28 sessions can sit behind a 24-session total.
+_NOT_COUNTED_WORDS = ("unavoidable", "exceptional", "unable to attend", "school closed")
+
+
+@dataclass(slots=True)
+class AttendanceMark:
+    """One registration session's mark."""
+
+    on: date
+    #: "AM" or "PM", as Arbor labels the two daily registers.
+    session: str | None = None
+    #: Arbor's own wording for the mark: "Present AM", "Any Other Unavoidable Cause".
+    mark: str | None = None
+    #: The code Arbor printed in the row, where it printed one: "Y7", "L".
+    code: str | None = None
+    #: The week heading the row sat under: "20 Sep 2026 - 26 Sep 2026".
+    week: str | None = None
+
+    @property
+    def status(self) -> str:
+        """A comparable classification of :attr:`mark`.
+
+        One of ``present``, ``late``, ``authorised``, ``unauthorised``,
+        ``unmarked``, ``not_counted`` or ``other``. ``other`` means the school
+        used wording this does not recognise, not that the session was fine.
+        """
+        lowered = (self.mark or "").casefold()
+        if not lowered:
+            return "other"
+        # Late before ordering on presence: "Late" implies the child was there,
+        # but a school counts it separately and so should this.
+        for words, status in (
+            (_UNMARKED_WORDS, "unmarked"),
+            (_LATE_WORDS, "late"),
+            (_UNAUTHORISED_WORDS, "unauthorised"),
+            (_AUTHORISED_WORDS, "authorised"),
+            (_NOT_COUNTED_WORDS, "not_counted"),
+            (_PRESENT_WORDS, "present"),
+        ):
+            if any(word in lowered for word in words):
+                return status
+        return "other"
+
+    @property
+    def is_absence(self) -> bool:
+        """Whether this session counts as an absence against the child."""
+        return self.status in ("authorised", "unauthorised")
 
 
 @dataclass(slots=True)
@@ -212,6 +286,8 @@ class StudentData:
     photo_url: str | None = None
 
     attendance: AttendanceSummary = field(default_factory=AttendanceSummary)
+    #: Every registration session Arbor lists, newest first.
+    attendance_marks: list[AttendanceMark] = field(default_factory=list)
     behaviour_points_positive: float | None = None
     behaviour_points_negative: float | None = None
     behaviour_incidents: list[BehaviourIncident] = field(default_factory=list)

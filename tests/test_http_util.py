@@ -222,5 +222,37 @@ class TestRefusalMessage(unittest.TestCase):
                 self.assertIsNone(http_util.refusal_message(payload))
 
 
+class TestLoggedOutJson(unittest.TestCase):
+    """A dead session's third disguise: a 200 with well-formed JSON."""
+
+    BODY = '{"items": [{"session_id": "x", "logged_in": false}], "success": true}'
+
+    def test_a_logged_out_body_is_a_stale_session(self) -> None:
+        self.assertTrue(http_util.says_logged_out(self.BODY))
+        self.assertEqual(
+            http_util.classify_response(200, self.BODY, retried=False),
+            http_util.RESPONSE_SESSION_STALE,
+        )
+
+    def test_after_retrying_it_is_treated_as_unavailable(self) -> None:
+        # Consistent with the rest: only the login handshake reports an auth
+        # failure, so a second refusal means skip the endpoint, not prompt.
+        self.assertEqual(
+            http_util.classify_response(200, self.BODY, retried=True),
+            http_util.RESPONSE_NOT_AVAILABLE,
+        )
+
+    def test_a_logged_in_body_is_fine(self) -> None:
+        body = '{"items": [{"logged_in": true, "display_name": "A Guardian"}]}'
+        self.assertFalse(http_util.says_logged_out(body))
+        self.assertEqual(
+            http_util.classify_response(200, body, retried=False), http_util.RESPONSE_OK
+        )
+
+    def test_ordinary_data_is_not_mistaken_for_it(self) -> None:
+        self.assertFalse(http_util.says_logged_out('{"assignments": [{"due": "x"}]}'))
+        self.assertFalse(http_util.says_logged_out("logged_in false"))
+
+
 if __name__ == "__main__":
     unittest.main()

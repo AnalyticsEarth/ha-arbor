@@ -501,5 +501,67 @@ class TestAssignmentAndBehaviourDetail(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.student.behaviour_points_net, 34.0)
 
 
+class TestAttendanceDetail(unittest.IsolatedAsyncioTestCase):
+    """Individual registration sessions, and the periods the KPI tile compares.
+
+    A percentage says a child was in; it cannot say which morning they were not.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.portal = FakePortal(
+            {
+                "/guardians/home-ui/dashboard": pages.SINGLE_CHILD_DASHBOARD,
+                "/guardians/attendance/index/student-id/40219": (
+                    pages.ATTENDANCE_BY_DATE_PAGE
+                ),
+                "/guardians/student/kpis/id/40219/": (
+                    pages.STUDENT_KPIS_WITH_COMPARISONS
+                ),
+                "/auth/current-user-settings/format/json": pages.CURRENT_USER_SETTINGS,
+            }
+        )
+        self.scraper = scraper_module.ArborScraper(self.portal.fetch, self.portal.fetch)
+        self.data = await self.scraper.async_scrape()
+        self.student = self.data.students["40219"]
+
+    def test_every_session_is_reported(self) -> None:
+        self.assertEqual(len(self.student.attendance_marks), 10)
+
+    def test_a_particular_absence_can_be_named(self) -> None:
+        absences = [mark for mark in self.student.attendance_marks if mark.is_absence]
+        self.assertEqual(
+            [(mark.on.isoformat(), mark.session, mark.mark) for mark in absences],
+            [
+                ("2026-09-17", "PM", "Unauthorised Absence"),
+                ("2026-09-17", "AM", "Illness"),
+            ],
+        )
+
+    def test_the_session_counts_are_filled_in_from_the_marks(self) -> None:
+        # These were all None before: the summary page states a percentage and
+        # the individual sessions were never read.
+        self.assertEqual(self.student.attendance.authorised_absences, 1)
+        self.assertEqual(self.student.attendance.unauthorised_absences, 1)
+        self.assertEqual(self.student.attendance.late_sessions, 1)
+
+    def test_the_schools_own_percentage_still_wins(self) -> None:
+        """The KPI headline is the school's figure and is not recomputed.
+
+        The marks give 66.67% over the sessions listed; the school says 100% over
+        the year. Overwriting its own headline with our arithmetic would be wrong.
+        """
+        self.assertEqual(self.student.attendance.percentage, 100.0)
+
+    def test_the_kpi_tile_periods_are_kept(self) -> None:
+        self.assertEqual(
+            self.student.attendance.by_period, {"Year": 100.0, "Last 4 weeks": 96.0}
+        )
+
+    def test_last_terms_behaviour_comes_from_the_tile(self) -> None:
+        # The behaviour page states this term, this year and lifetime. Only the
+        # KPI tile carries the term before.
+        self.assertEqual(self.student.behaviour_totals["positive"]["Last term"], 32.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -971,5 +971,179 @@ class TestAssignmentDetail(unittest.TestCase):
         self.assertEqual(parser.split_course("Open Evening"), ("Open Evening", None))
 
 
+class TestKpiComparisons(unittest.TestCase):
+    """A KPI tile states the figures it compares its headline against."""
+
+    def setUp(self) -> None:
+        self.kpis = parser.extract_kpis([pages.STUDENT_KPIS_WITH_COMPARISONS])
+
+    def test_a_bar_chart_comparison_is_read_from_the_bar(self) -> None:
+        attendance = next(k for k in self.kpis if "Attendance" in k.title)
+        self.assertEqual(attendance.comparisons, {"Year": "100%", "Last 4 weeks": "96%"})
+
+    def test_a_captioned_comparison_is_split_on_the_colon(self) -> None:
+        positive = next(k for k in self.kpis if k.title.startswith("Positive"))
+        self.assertEqual(
+            positive.comparisons, {"This year": "35 incidents", "Last term": "32 incidents"}
+        )
+
+    def test_attendance_periods_are_percentages(self) -> None:
+        self.assertEqual(
+            parser.attendance_periods_from_kpis(self.kpis),
+            {"Year": 100.0, "Last 4 weeks": 96.0},
+        )
+
+    def test_behaviour_periods_are_counts_per_polarity(self) -> None:
+        periods = parser.behaviour_periods_from_kpis(self.kpis)
+        # "Last term" is on the tile and nowhere else: the behaviour page states
+        # this term, this year and the child's lifetime, but not the one before.
+        self.assertEqual(periods["positive"]["Last term"], 32.0)
+        self.assertEqual(periods["negative"]["Last term"], 1.0)
+
+    def test_a_tile_without_comparisons_is_not_a_failure(self) -> None:
+        plain = parser.extract_kpis([pages.STUDENT_KPIS])
+        self.assertTrue(plain)
+        self.assertTrue(all(kpi.comparisons == {} for kpi in plain))
+        # The headline still reads, which is what the sensor uses.
+        self.assertEqual(parser.attendance_from_kpis(plain), 100.0)
+
+
+class TestAttendanceByDate(unittest.TestCase):
+    """Every registration session, with the mark the school recorded."""
+
+    def setUp(self) -> None:
+        self.rows = parser.extract_section_rows([pages.ATTENDANCE_BY_DATE_PAGE])
+        self.marks = parser.extract_attendance_marks(self.rows)
+
+    def test_a_present_mark_survives_having_no_text(self) -> None:
+        """Arbor draws a present mark as a tick, which flattens to nothing.
+
+        Requiring a row to have text discarded 24 of a term's 28 sessions.
+        """
+        present = [mark for mark in self.marks if mark.status == "present"]
+        self.assertEqual(len(present), 3)
+        self.assertIsNone(present[0].code)
+
+    def test_reads_every_session(self) -> None:
+        self.assertEqual(len(self.marks), 10)
+
+    def test_newest_first(self) -> None:
+        self.assertEqual(self.marks[0].on, date(2026, 9, 22))
+        self.assertEqual(self.marks[0].session, "PM")
+
+    def test_splits_the_date_from_the_register(self) -> None:
+        morning = next(
+            m for m in self.marks if m.on == date(2026, 9, 21) and m.session == "AM"
+        )
+        self.assertEqual(morning.mark, "Present AM")
+        self.assertEqual(morning.week, "20 Sep 2026 - 26 Sep 2026")
+
+    def test_keeps_the_code_the_school_printed(self) -> None:
+        unavoidable = next(m for m in self.marks if m.code == "Y7")
+        self.assertEqual(unavoidable.mark, "Any Other Unavoidable Cause")
+        self.assertEqual(unavoidable.status, "not_counted")
+        # A Y code is neither an attendance nor an absence.
+        self.assertFalse(unavoidable.is_absence)
+
+    def test_a_dash_is_an_absent_mark_not_a_code(self) -> None:
+        unmarked = next(m for m in self.marks if m.status == "unmarked")
+        self.assertIsNone(unmarked.code)
+        self.assertEqual(unmarked.mark, "No Mark")
+        self.assertFalse(unmarked.is_absence)
+
+    def test_classifies_the_marks_a_school_actually_uses(self) -> None:
+        self.assertEqual(
+            parser.summarise_attendance_marks(self.marks),
+            {"unmarked": 2, "present": 3, "late": 1, "authorised": 1,
+             "unauthorised": 1, "not_counted": 2},
+        )
+
+    def test_late_counts_as_present_but_is_still_counted_as_late(self) -> None:
+        summary = parser.attendance_from_marks(self.marks)
+        self.assertEqual(summary.late_sessions, 1)
+        self.assertEqual(summary.present_sessions, 4)
+
+    def test_the_percentage_excludes_sessions_the_school_does_not_count(self) -> None:
+        """A "Y" code is out of the denominator, not counted as an absence.
+
+        This is how 28 listed sessions produce a 24-session total at Wrotham.
+        """
+        summary = parser.attendance_from_marks(self.marks)
+        # 4 present or late out of 6 countable; the 2 Y codes and 2 unmarked
+        # sessions are in neither number.
+        self.assertEqual(summary.percentage, 66.67)
+        self.assertEqual(summary.authorised_absences, 1)
+        self.assertEqual(summary.unauthorised_absences, 1)
+
+    def test_an_unknown_mark_is_kept_rather_than_guessed_at(self) -> None:
+        rows = [parser.SectionRow(section="w", text="", label="01 Sep 2026 AM",
+                                  description="Study Leave")]
+        mark = parser.extract_attendance_marks(rows)[0]
+        self.assertEqual(mark.mark, "Study Leave")
+        self.assertEqual(mark.status, "other")
+        self.assertFalse(mark.is_absence)
+
+    def test_a_row_that_is_not_a_session_is_ignored(self) -> None:
+        rows = parser.extract_section_rows([pages.DASHBOARD_WITH_SECTIONS])
+        self.assertEqual(parser.extract_attendance_marks(rows), [])
+
+
+class TestCurrencyIsNotReadFromAPath(unittest.TestCase):
+    """Arbor's account filters are links, and a link is not a balance."""
+
+    URL = "/guardians/customer-account-ui/top-ups-dashboard/student-id/1879/term-id/40"
+
+    def test_a_path_is_not_a_monetary_amount(self) -> None:
+        # Reported the child's own id as a balance of £1879.
+        self.assertIsNone(parser.parse_currency(self.URL))
+        self.assertIsNone(parser.parse_currency("https://school.example/accounts/12"))
+
+    def test_a_bare_number_is_still_a_balance(self) -> None:
+        # Some schools print one without a symbol.
+        self.assertEqual(parser.parse_currency("4.15"), 4.15)
+        self.assertEqual(parser.parse_currency("£4.15"), 4.15)
+        self.assertEqual(parser.parse_currency("-£1.50"), -1.50)
+
+    def test_a_filter_link_is_not_an_account(self) -> None:
+        page = {
+            "items": [
+                {"xtype": "mis-section", "props": {"title": "Account"}},
+                {"fieldLabel": "Meals", "value": self.URL},
+            ]
+        }
+        self.assertEqual(parser.extract_accounts([page]), [])
+
+    def test_looks_like_path_leaves_ordinary_text_alone(self) -> None:
+        self.assertFalse(parser.looks_like_path("Balance: £4.15"))
+        self.assertFalse(parser.looks_like_path("Maths KS4: 9Ma3"))
+        self.assertTrue(parser.looks_like_path("/guardians/home-ui/dashboard"))
+
+
+class TestRouteClassification(unittest.TestCase):
+    """A caption can say nothing; the route behind it does."""
+
+    def test_a_bare_caption_is_classified_by_its_path(self) -> None:
+        tree = {"items": [{"text": "By Date",
+                           "url": "/guardians/student-ui/attendance-by-date/student-id/40219"}]}
+        found = parser.classify_pages([tree], const.DOMAIN_KEYWORDS)
+        self.assertEqual(
+            found[const.DATA_ATTENDANCE],
+            {"By Date": "/guardians/student-ui/attendance-by-date/student-id/40219"},
+        )
+
+    def test_the_caption_still_wins(self) -> None:
+        # The caption names behaviour; the path names attendance. Arbor's own
+        # caption is the better description of what the page shows.
+        tree = {"items": [{"text": "Behaviour",
+                           "url": "/guardians/student-ui/attendance-by-date/student-id/40219"}]}
+        found = parser.classify_pages([tree], const.DOMAIN_KEYWORDS)
+        self.assertIn(const.DATA_BEHAVIOUR, found)
+        self.assertNotIn(const.DATA_ATTENDANCE, found)
+
+    def test_a_path_naming_nothing_is_still_skipped(self) -> None:
+        tree = {"items": [{"text": "Overview", "url": "/guardians/student-ui/overview/id/40219"}]}
+        self.assertEqual(parser.classify_pages([tree], const.DOMAIN_KEYWORDS), {})
+
+
 if __name__ == "__main__":
     unittest.main()

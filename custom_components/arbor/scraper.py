@@ -59,6 +59,10 @@ from .parser import (
     extract_assignment_details,
     enrich_assignments,
     extract_kpis,
+    extract_attendance_marks,
+    attendance_from_marks,
+    attendance_periods_from_kpis,
+    behaviour_periods_from_kpis,
     headline_behaviour_total,
     extract_section_rows,
     extract_assignments_from_sections,
@@ -367,9 +371,31 @@ class ArborScraper:
         # The KPI list is the school's own headline figure, so it wins.
         kpis = extract_kpis(kpi_trees)
         student.attendance = extract_attendance(child_trees)
+
+        # The Attendance By Date page lists every registration session, which is
+        # the only place a particular absence is visible rather than a total.
+        attendance_rows = extract_section_rows(trees[DATA_ATTENDANCE])
+        student.attendance_marks = extract_attendance_marks(attendance_rows)
+        if student.attendance_marks:
+            # The school's own stated totals win; these fill the gaps, which at
+            # a school that publishes only a percentage is all of them.
+            derived = attendance_from_marks(student.attendance_marks)
+            for name in (
+                "present_sessions",
+                "authorised_absences",
+                "unauthorised_absences",
+                "late_sessions",
+                "percentage",
+                "period",
+            ):
+                if getattr(student.attendance, name) is None:
+                    setattr(student.attendance, name, getattr(derived, name))
+            student.sourced_domains.add(DATA_ATTENDANCE)
+
         if (kpi_attendance := attendance_from_kpis(kpis)) is not None:
             student.attendance.percentage = kpi_attendance
             student.sourced_domains.add(DATA_ATTENDANCE)
+        student.attendance.by_period = attendance_periods_from_kpis(kpis)
         (
             student.behaviour_points_positive,
             student.behaviour_points_negative,
@@ -385,6 +411,9 @@ class ArborScraper:
         # states its totals per period.
         behaviour_rows = extract_section_rows(trees[DATA_BEHAVIOUR])
         student.behaviour_totals = extract_behaviour_totals(behaviour_rows)
+        # The KPI tile is the only source of the previous term's figure.
+        for polarity, periods in behaviour_periods_from_kpis(kpis).items():
+            student.behaviour_totals.setdefault(polarity, {}).update(periods)
         if student.behaviour_points_net is None and student.behaviour_totals:
             # No KPI panel at this school: the page's own totals are the
             # headline, taken for the same period the panel would have covered.

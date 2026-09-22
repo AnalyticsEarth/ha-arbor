@@ -54,7 +54,7 @@ Per child:
 | Entity | Type | Notes |
 | --- | --- | --- |
 | *(the child)* | sensor | Named after the child, e.g. `sensor.amelia_example`. State is their name; **every** detail below is on it as an attribute |
-| Attendance | sensor (%) | Attributes: present sessions, authorised/unauthorised absences, lates |
+| Attendance | sensor (%) | Attributes: every registration session with its mark, the absences on their own, session counts, and the periods the school's own tile compares |
 | Behaviour points | sensor | Net points. Attributes: every incident with its date, type, subject, teacher and comment, plus counts by subject, by type and by teacher |
 | Positive points / Negative points | sensor | The two sides on their own, for graphing |
 | Assignments outstanding | sensor | Attributes: the full list with title, subject, class, due date, status, marking, how to hand it in and the teacher's instructions |
@@ -96,6 +96,62 @@ content: >-
 Use the individual sensors for anything you want to **graph or trigger on** —
 attributes are not kept in history, and the list-valued ones are explicitly
 excluded from the recorder so they do not bloat your database.
+
+### Which morning they were actually out
+
+A percentage cannot tell you which session a child missed. The attendance sensor
+now carries every registration Arbor lists — two a day, AM and PM — with the mark
+in the school's own words:
+
+```jinja
+{{ state_attr('sensor.amelia_attendance', 'absences') }}
+{# [{'date': '2026-09-17', 'session': 'AM', 'mark': 'Illness',
+     'code': 'I', 'status': 'authorised', 'absence': true}, ...] #}
+```
+
+| | |
+| --- | --- |
+| `sessions` | every session, newest first |
+| `absences` | just the ones counted against the child |
+| `by_status` | `{'present': 24, 'unmarked': 2, 'not_counted': 2}` |
+| `sessions_listed` | how many registers Arbor published |
+| `by_period` | what the school's own tile compares: `{'Year': 100.0, 'Last 4 weeks': 96.0}` |
+
+`status` is one of `present`, `late`, `authorised`, `unauthorised`, `unmarked`,
+`not_counted` or `other`. Two of those are worth understanding:
+
+- **`not_counted`** is a DfE "Y" code — the child *could not* attend, and the
+  session counts neither for them nor against them. It is why 28 listed sessions
+  can sit behind a 24-session total.
+- **`other`** means the school used wording this doesn't recognise, **not** that
+  the session was fine. The school's own text is always kept in `mark`, so a
+  status of `other` is a prompt to read it rather than something to ignore.
+
+Session counts (`present_sessions`, `late_sessions`, the two absence counts) are
+filled in from these marks when the school does not state its own — at Wrotham it
+states only a percentage, so before this they were all empty.
+
+Alert on an unexplained absence:
+
+```yaml
+automation:
+  - alias: Unauthorised absence
+    triggers:
+      - trigger: state
+        entity_id: sensor.amelia_attendance
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ state_attr('sensor.amelia_attendance', 'absences')
+             | selectattr('status', 'eq', 'unauthorised') | list | count > 0 }}
+    actions:
+      - action: notify.family
+        data:
+          message: >-
+            {% set a = state_attr('sensor.amelia_attendance', 'absences')
+               | selectattr('status', 'eq', 'unauthorised') | first %}
+            Unauthorised absence: {{ a.date }} {{ a.session }} ({{ a.mark }}).
+```
 
 ### What each assignment and behaviour point actually says
 
@@ -151,6 +207,11 @@ and the sensor's value is the school's own headline count.
 
 The sensor's own value is the **academic year**, which is what the portal's
 headline shows. The lifetime figure is the larger, and usually not the one meant.
+
+`Last term` comes from the school's KPI tile and appears nowhere else — the
+behaviour page states this term, this year and the child's lifetime, but not the
+one before — so it is the only way to see whether things are going better or
+worse than they were.
 
 ### Siblings
 

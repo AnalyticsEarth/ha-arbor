@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from datetime import datetime  # noqa: E402
+from datetime import date, datetime, timedelta  # noqa: E402
 
 from _loader import errors, load  # noqa: E402
 from fixtures import pages  # noqa: E402
@@ -280,7 +280,11 @@ class TestTheRequestBudgetActuallyStops(unittest.IsolatedAsyncioTestCase):
                 return inner.outer._page_with_links(f"/deep{path}")
 
         self.portal = Branching(self)
-        self.scraper = scraper_module.ArborScraper(self.portal.fetch, self.portal.fetch)
+        # calendar_days=1: the timetable window is a separate, known cost, and
+        # this test is about the page walk.
+        self.scraper = scraper_module.ArborScraper(
+            self.portal.fetch, self.portal.fetch, calendar_days=1
+        )
         self.data = await self.scraper.async_scrape()
 
     def test_the_walk_is_cut_off(self) -> None:
@@ -640,6 +644,147 @@ class TestAttendanceDetail(unittest.IsolatedAsyncioTestCase):
         # The behaviour page states this term, this year and lifetime. Only the
         # KPI tile carries the term before.
         self.assertEqual(self.student.behaviour_totals["positive"]["Last term"], 32.0)
+
+
+class TestTimetableWindow(unittest.IsolatedAsyncioTestCase):
+    """A week of timetable is a week of separate requests.
+
+    Arbor's guardian calendar answers with one day and ignores every range
+    parameter tried against a live tenant, so the only control is the date
+    segment -- one request per day.
+    """
+
+    def _portal(self, per_day: bool = True) -> FakePortal:
+        today = date.today()
+
+        class Calendar(FakePortal):
+            async def fetch(inner, path: str) -> object:
+                inner.requested.append(path)
+                if path == "/guardians/home-ui/dashboard":
+                    return pages.SINGLE_CHILD_DASHBOARD
+                if path == "/auth/current-user-settings/format/json":
+                    return pages.CURRENT_USER_SETTINGS
+                if "get-calendar-data" not in path:
+                    raise errors.ArborNotAvailableError(f"no such page: {path}")
+                if "/date/" not in path:
+                    return pages.calendar_for_day(today, "Biology")
+                if not per_day:
+                    raise errors.ArborNotAvailableError("no per-day calendar here")
+                day = date.fromisoformat(path.split("/date/")[1].strip("/"))
+                return pages.calendar_for_day(day, "Chemistry")
+
+        return Calendar({})
+
+    async def test_a_week_is_fetched_a_day_at_a_time(self) -> None:
+        portal = self._portal()
+        runner = scraper_module.ArborScraper(
+            portal.fetch, portal.fetch, calendar_days=7
+        )
+        data = await runner.async_scrape()
+        student = data.students["40219"]
+        days = sorted({lesson.start.date() for lesson in student.lessons})
+        self.assertEqual(len(days), 7)
+        self.assertEqual(days[0], date.today())
+        self.assertEqual(days[-1], date.today() + timedelta(days=6))
+
+    async def test_the_window_bounds_the_requests(self) -> None:
+        portal = self._portal()
+        runner = scraper_module.ArborScraper(
+            portal.fetch, portal.fetch, calendar_days=3
+        )
+        await runner.async_scrape()
+        calendar_calls = [p for p in portal.requested if "get-calendar-data" in p]
+        self.assertEqual(len(calendar_calls), 3)
+
+    async def test_one_day_asks_only_for_today(self) -> None:
+        portal = self._portal()
+        runner = scraper_module.ArborScraper(
+            portal.fetch, portal.fetch, calendar_days=1
+        )
+        await runner.async_scrape()
+        self.assertEqual([p for p in portal.requested if "/date/" in p], [])
+
+    async def test_the_window_is_clamped(self) -> None:
+        portal = self._portal()
+        runner = scraper_module.ArborScraper(
+            portal.fetch, portal.fetch, calendar_days=999
+        )
+        await runner.async_scrape()
+        calendar_calls = [p for p in portal.requested if "get-calendar-data" in p]
+        self.assertEqual(len(calendar_calls), scraper_module.MAX_CALENDAR_DAYS)
+
+    async def test_a_school_without_the_per_day_form_still_gets_today(self) -> None:
+        """A refused date segment must not cost six pointless requests."""
+        portal = self._portal(per_day=False)
+        runner = scraper_module.ArborScraper(
+            portal.fetch, portal.fetch, calendar_days=7
+        )
+        data = await runner.async_scrape()
+        student = data.students["40219"]
+        self.assertEqual(len(student.lessons), 1)
+        self.assertEqual(student.lessons[0].start.date(), date.today())
+        # Today, then one probe that is refused. The refusal is remembered
+        # under a date-masked key, so the remaining days cost no requests.
+        self.assertEqual(
+            len([p for p in portal.requested if "/date/" in p]),
+            1,
+            "a refused endpoint should not be re-requested for every day",
+        )
+
+    async def test_a_dropped_day_does_not_truncate_the_week(self) -> None:
+        """One transient failure must cost one day, not the rest of the window.
+
+        A refusal is permanent and cached; a dropped connection is not, and
+        treating them alike lost Thursday and Friday whenever Wednesday blipped.
+        """
+        today = date.today()
+        blip = today + timedelta(days=2)
+
+        class Flaky(FakePortal):
+            async def fetch(inner, path: str) -> object:
+                inner.requested.append(path)
+                if path == "/guardians/home-ui/dashboard":
+                    return pages.SINGLE_CHILD_DASHBOARD
+                if path == "/auth/current-user-settings/format/json":
+                    return pages.CURRENT_USER_SETTINGS
+                if "get-calendar-data" not in path:
+                    raise errors.ArborNotAvailableError(f"no such page: {path}")
+                if "/date/" not in path:
+                    return pages.calendar_for_day(today, "Biology")
+                day = date.fromisoformat(path.split("/date/")[1].strip("/"))
+                if day == blip:
+                    raise errors.ArborConnectionError("connection dropped")
+                return pages.calendar_for_day(day, "Chemistry")
+
+        portal = Flaky({})
+        runner = scraper_module.ArborScraper(portal.fetch, portal.fetch, calendar_days=5)
+        data = await runner.async_scrape()
+        days = sorted({lesson.start.date() for lesson in data.students["40219"].lessons})
+        self.assertNotIn(blip, days)
+        self.assertEqual(len(days), 4)
+        self.assertIn(today + timedelta(days=4), days)
+
+    async def test_repeated_days_are_not_published_twice(self) -> None:
+        """Some schools answer every date with the same payload."""
+        today = date.today()
+
+        class SameEveryDay(FakePortal):
+            async def fetch(inner, path: str) -> object:
+                inner.requested.append(path)
+                if path == "/guardians/home-ui/dashboard":
+                    return pages.SINGLE_CHILD_DASHBOARD
+                if path == "/auth/current-user-settings/format/json":
+                    return pages.CURRENT_USER_SETTINGS
+                if "get-calendar-data" in path:
+                    return pages.calendar_for_day(today, "Biology")
+                raise errors.ArborNotAvailableError(f"no such page: {path}")
+
+        portal = SameEveryDay({})
+        runner = scraper_module.ArborScraper(
+            portal.fetch, portal.fetch, calendar_days=7
+        )
+        data = await runner.async_scrape()
+        self.assertEqual(len(data.students["40219"].lessons), 1)
 
 
 if __name__ == "__main__":

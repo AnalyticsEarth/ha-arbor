@@ -9,6 +9,8 @@ grids sometimes key rows by ``dataIndex`` and sometimes emit positional arrays.
 
 from __future__ import annotations
 
+from datetime import date
+
 GUARDIAN_DASHBOARD = {
     "success": True,
     "items": [
@@ -1301,3 +1303,18 @@ ATTENDANCE_BY_DATE_PAGE = {
         },
     ],
 }
+
+
+def calendar_for_day(day: date, summary: str) -> dict:
+    """One day's guardian calendar feed, as Arbor answers it per date."""
+    return {
+        "success": True,
+        "items": [
+            {
+                "title": summary,
+                "start_datetime": f"{day.isoformat()} 09:00:00",
+                "end_datetime": f"{day.isoformat()} 10:00:00",
+                "location": "S4",
+            }
+        ],
+    }

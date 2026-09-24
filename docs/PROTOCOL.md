@@ -441,8 +441,50 @@ Those links live in `subNav.props.props.treeData.items[].fields`, which
 `find_links` does not walk, so they are not discovered from the navigation; the
 pages that do get read are the ones linked from a page's own body.
 
-The calendar feed returns **today only**. A date range presumably narrows it, but
-that has not been established, so the timetable covers the current day.
+### The calendar feed takes a day, not a range
+
+`/guardians/widget-data/get-calendar-data/student-id/<id>/` answers with **today
+only**. A date *segment* moves it:
+
+```
+/guardians/widget-data/get-calendar-data/student-id/<id>/date/2026-09-25/
+```
+
+That returns 25 September's timetable and nothing else. Every range form was
+tried against a live tenant and every one returned today regardless:
+
+| Tried | Result |
+| --- | --- |
+| `…/start-date/2026-09-24/end-date/2026-10-01/` | today |
+| `…/startDate/…/endDate/…/` | today |
+| `…/view/week/`, `…/view/agendaWeek/start-date/…/end-date/…/` | today |
+| `…/num-days/7/`, `…/days/7/` | today |
+| `…?start=…&end=…`, `…?start_date=…&end_date=…` | today |
+| **`…/date/2026-09-25/`** | **that day** |
+
+So a week of timetable costs a week of requests — which is why the window is an
+option rather than a fixed number, and why it is capped.
+
+Two consequences worth stating:
+
+- **Deduplicate.** A school that answers every date with the same payload, or two
+  overlapping sources, would otherwise publish the same lesson several times.
+- **Do not stop at the first empty or failed day.** A school with no per-day form
+  refuses the first date segment, and that refusal is remembered under a
+  date-masked key so the rest of the window costs no requests at all. Breaking
+  out of the loop instead would let one dropped connection on a Wednesday lose
+  Thursday and Friday.
+
+A weekend simply comes back empty, so no school-week calendar is needed to skip
+it. Verified live: 7 requests returned 37 lessons over the 5 school days, with
+the two weekend days empty.
+
+### The printable timetable is a form, not data
+
+`/guardians/student-ui/printable-timetable/id/<id>` is a "Download Timetable"
+form whose output is a PDF. It is worth reading for one thing only: its
+`schoolWeek` field lists the school's own week boundaries, e.g.
+`{"label": "21 Sep 2026 - 25 Sep 2026", "value": "2026-09-21/2026-09-25"}`.
 
 ### The calendar is a POST, and not to the widget endpoint
 

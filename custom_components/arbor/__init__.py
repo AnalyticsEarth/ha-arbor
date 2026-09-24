@@ -22,6 +22,10 @@ from .const import (
     CONF_EMAIL,
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL_MINUTES,
+    CONF_CALENDAR_DAYS,
+    DEFAULT_CALENDAR_DAYS,
+    MAX_CALENDAR_DAYS,
+    MIN_CALENDAR_DAYS,
     CONF_SCHOOL_NAME,
     DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
@@ -69,12 +73,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ArborConfigEntry) -> boo
         MIN_SCAN_INTERVAL_MINUTES,
         int(entry.options.get(CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES)),
     )
+    calendar_days = max(
+        MIN_CALENDAR_DAYS,
+        min(
+            int(entry.options.get(CONF_CALENDAR_DAYS, DEFAULT_CALENDAR_DAYS)),
+            MAX_CALENDAR_DAYS,
+        ),
+    )
     coordinator = ArborCoordinator(
         hass,
         entry,
         client,
         entry_title=entry.data.get(CONF_SCHOOL_NAME) or entry.title,
         update_interval=timedelta(minutes=minutes),
+        calendar_days=calendar_days,
     )
 
     await coordinator.async_config_entry_first_refresh()

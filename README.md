@@ -65,7 +65,7 @@ Per child:
 | School today | binary_sensor | Whether anything is timetabled today |
 | In lesson | binary_sensor | Whether a lesson is running right now |
 | Overdue assignments | binary_sensor | On when anything is overdue |
-| Timetable | calendar | Lessons and school events |
+| Timetable | calendar | Lessons and school events, for the week ahead by default |
 | Assignments | todo | Read-only; submitted work shows as completed |
 
 Entities whose data your school does not publish stay `unknown` rather than
@@ -96,6 +96,20 @@ content: >-
 Use the individual sensors for anything you want to **graph or trigger on** —
 attributes are not kept in history, and the list-valued ones are explicitly
 excluded from the recorder so they do not bloat your database.
+
+### How far ahead the timetable goes
+
+Arbor's guardian calendar serves **one day per request** and ignores every range
+parameter — `start-date`/`end-date`, `view/week`, `num-days` and the query-string
+forms all come back with today regardless. Only a `date` segment moves it.
+
+So the timetable window is a request count as much as a horizon: **one extra
+request per child per refresh, per day**. The default is 7 days (today plus six),
+and you can change it in the integration's options alongside the update interval.
+The cap is 21.
+
+A weekend just comes back empty, so a 7-day window on a Thursday gives you the
+rest of this week and the start of next.
 
 ### Which morning they were actually out
 

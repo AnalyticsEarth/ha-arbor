@@ -38,9 +38,13 @@
     "step": {
       "init": {
         "title": "Arbor options",
-        "description": "Arbor updates a few times a day at most, so there is little to gain from polling frequently.",
+        "description": "Arbor updates a few times a day at most, so there is little to gain from polling frequently. Arbor serves one day of timetable per request, so the timetable window is also how many extra requests each update makes per child.",
         "data": {
-          "scan_interval_minutes": "Update interval"
+          "scan_interval_minutes": "Update interval",
+          "calendar_days": "Days of timetable to fetch"
+        },
+        "data_description": {
+          "calendar_days": "Today plus the days after it. 7 covers the week ahead."
         }
       }
     }

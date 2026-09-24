@@ -1110,6 +1110,30 @@ def extract_lessons_from_calendar(payload: Any) -> list[Lesson]:
     return sorted(unique.values(), key=lambda lesson: lesson.sort_key)
 
 
+def dedupe_lessons(lessons: list[Lesson]) -> list[Lesson]:
+    """Drop repeated events, keeping the first of each, in date order.
+
+    A week of timetable is a week of separate requests, and a school that answers
+    every date with the same payload -- or two overlapping sources -- would
+    otherwise publish the same lesson several times over.
+    """
+    seen: set[tuple[str, str, str, str, str]] = set()
+    unique: list[Lesson] = []
+    for lesson in sorted(lessons, key=lambda item: item.sort_key):
+        key = (
+            lesson.summary.casefold(),
+            lesson.start.isoformat() if lesson.start else "",
+            lesson.end.isoformat() if lesson.end else "",
+            lesson.all_day_on.isoformat() if lesson.all_day_on else "",
+            (lesson.location or "").casefold(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(lesson)
+    return unique
+
+
 def extract_calendar_references(trees: list[Any]) -> list[tuple[str, str]]:
     """``(object_id, object_type_id)`` pairs from calendar components.
 

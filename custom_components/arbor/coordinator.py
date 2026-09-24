@@ -17,7 +17,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ArborClient
-from .const import DATA_REJECTIONS, DOMAIN
+from .const import DATA_REJECTIONS, DEFAULT_CALENDAR_DAYS, DOMAIN
 from .errors import ArborAuthError, ArborError
 from .models import ArborData
 from .scraper import ArborScraper
@@ -42,6 +42,7 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
         *,
         entry_title: str,
         update_interval: timedelta,
+        calendar_days: int = DEFAULT_CALENDAR_DAYS,
     ) -> None:
         """Set up the coordinator for one configured Arbor account."""
         super().__init__(
@@ -57,6 +58,7 @@ class ArborCoordinator(DataUpdateCoordinator[ArborData]):
             client.async_fetch_json,
             client.async_post_json,
             logger=_LOGGER,
+            calendar_days=calendar_days,
         )
         # Consecutive refreshes in which Arbor rejected the stored credentials.
         # Held in hass.data rather than on self, because a failed first refresh

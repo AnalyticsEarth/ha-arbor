@@ -13,9 +13,17 @@ CONF_PASSWORD = "password"
 CONF_BASE_URL = "base_url"
 CONF_SCHOOL_NAME = "school_name"
 CONF_SCAN_INTERVAL_MINUTES = "scan_interval_minutes"
+CONF_CALENDAR_DAYS = "calendar_days"
 
 DEFAULT_SCAN_INTERVAL_MINUTES = 30
 MIN_SCAN_INTERVAL_MINUTES = 10
+
+# How many days of timetable to fetch, today included. Arbor's guardian calendar
+# serves exactly one day per request and ignores every range parameter tried, so
+# this is also the number of requests it costs per child per refresh.
+DEFAULT_CALENDAR_DAYS = 7
+MIN_CALENDAR_DAYS = 1
+MAX_CALENDAR_DAYS = 21
 
 # Arbor is a school MIS, not a real-time system. Polling harder than this only
 # adds load to the school's tenant without surfacing anything new.
@@ -44,6 +52,13 @@ NOTIFICATIONS_PATH = "/user-notification/get-notifications/format/json/"
 STUDENT_KPIS_PATH = "/guardians/student/kpis/id/{student_id}/"
 GUARDIAN_CALENDAR_PATH = (
     "/guardians/widget-data/get-calendar-data/student-id/{student_id}/"
+)
+# The same feed for one named day. Without the date segment it answers with today
+# only; `start-date`/`end-date`, `startDate`/`endDate`, `view/week`, `num-days`
+# and query-string forms were all tried against a live tenant and all returned
+# today regardless. A day at a time is the only range control Arbor offers.
+GUARDIAN_CALENDAR_DAY_PATH = (
+    "/guardians/widget-data/get-calendar-data/student-id/{student_id}/date/{date}/"
 )
 
 GUARDIAN_DASHBOARD_PAGE = "/guardians/home-ui/dashboard"

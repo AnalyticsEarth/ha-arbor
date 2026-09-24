@@ -24,6 +24,10 @@ from .errors import (
 from .const import (
     ALL_DATA_DOMAINS,
     GUARDIAN_CALENDAR_PATH,
+    GUARDIAN_CALENDAR_DAY_PATH,
+    DEFAULT_CALENDAR_DAYS,
+    MAX_CALENDAR_DAYS,
+    MIN_CALENDAR_DAYS,
     STUDENT_KPIS_PATH,
     CALENDAR_ENTRY_LIST_PATH,
     CALENDAR_DATA_PATH,
@@ -71,6 +75,7 @@ from .parser import (
     behaviour_from_kpis,
     extract_grades,
     extract_lessons_from_calendar,
+    dedupe_lessons,
     extract_lessons_from_tables,
     extract_notices,
     extract_profile_fields,
@@ -146,12 +151,15 @@ class ArborScraper:
         post_json: JsonPoster | None = None,
         *,
         logger: logging.Logger | None = None,
+        calendar_days: int = DEFAULT_CALENDAR_DAYS,
     ) -> None:
         """Take the fetchers this scraper will use."""
         self._fetch_page = fetch_page
         self._fetch_json = fetch_json
         self._post_json = post_json
         self._log = logger or _LOGGER
+        # One request per day, so this is a load setting as much as a window.
+        self._calendar_days = max(MIN_CALENDAR_DAYS, min(calendar_days, MAX_CALENDAR_DAYS))
         # Page paths learned on a previous scrape, reused so discovery cost is
         # paid once rather than on every poll.
         self._page_cache: dict[str, dict[str, dict[str, str]]] = {}
@@ -484,7 +492,7 @@ class ArborScraper:
             ]
         if not lessons and allow_shared_sources:
             lessons = extract_lessons_from_tables(trees[DATA_TIMETABLE])
-        student.lessons = sorted(lessons, key=lambda lesson: lesson.sort_key)
+        student.lessons = dedupe_lessons(lessons)
 
         # Discovery can find a child's id without ever seeing their name, when
         # Arbor puts it in page data rather than a link caption. Look again in
@@ -567,12 +575,31 @@ class ArborScraper:
             kpis.append(kpi_tree)
             student.raw["kpis"] = kpi_tree
 
-        calendar_tree = await self._try_json(
-            GUARDIAN_CALENDAR_PATH.format(student_id=student.student_id)
-        )
-        if calendar_tree is not None:
+        # Arbor serves one day per request and ignores every range parameter, so
+        # a week of timetable is a week of requests. The first day is fetched
+        # without a date segment: that is the form the dashboard itself uses, and
+        # it is the one known to work at every school seen.
+        today = date.today()
+        for offset in range(self._calendar_days):
+            day = today + timedelta(days=offset)
+            path = (
+                GUARDIAN_CALENDAR_PATH.format(student_id=student.student_id)
+                if offset == 0
+                else GUARDIAN_CALENDAR_DAY_PATH.format(
+                    student_id=student.student_id, date=day.isoformat()
+                )
+            )
+            calendar_tree = await self._try_json(path)
+            if calendar_tree is None:
+                # Keep going rather than truncating the week. A school that has
+                # no per-day form refuses the first date segment, and `_try`
+                # remembers that under a date-masked key, so the remaining days
+                # cost no requests at all. Breaking out here instead would let a
+                # single dropped connection on Wednesday lose Thursday and Friday.
+                continue
             calendar.append(calendar_tree)
-            student.raw["calendar"] = calendar_tree
+            key = "calendar" if offset == 0 else f"calendar:{day.isoformat()}"
+            student.raw[key] = calendar_tree
         return kpis, calendar
 
     def _calendar_templates(self) -> list[tuple[str, tuple[str, ...]]]:

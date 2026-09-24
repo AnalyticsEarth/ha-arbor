@@ -34,6 +34,10 @@ from .const import (
     CONF_EMAIL,
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL_MINUTES,
+    CONF_CALENDAR_DAYS,
+    DEFAULT_CALENDAR_DAYS,
+    MAX_CALENDAR_DAYS,
+    MIN_CALENDAR_DAYS,
     CONF_SCHOOL_NAME,
     DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
@@ -201,19 +205,21 @@ class ArborOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Show and save the polling interval."""
+        """Show and save the polling interval and the timetable window."""
         if user_input is not None:
             return self.async_create_entry(
                 data={
                     CONF_SCAN_INTERVAL_MINUTES: int(
                         user_input[CONF_SCAN_INTERVAL_MINUTES]
-                    )
+                    ),
+                    CONF_CALENDAR_DAYS: int(user_input[CONF_CALENDAR_DAYS]),
                 }
             )
 
         current = self.config_entry.options.get(
             CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES
         )
+        days = self.config_entry.options.get(CONF_CALENDAR_DAYS, DEFAULT_CALENDAR_DAYS)
         schema = vol.Schema(
             {
                 vol.Required(CONF_SCAN_INTERVAL_MINUTES, default=current): NumberSelector(
@@ -224,7 +230,19 @@ class ArborOptionsFlow(OptionsFlow):
                         unit_of_measurement="minutes",
                         mode=NumberSelectorMode.BOX,
                     )
-                )
+                ),
+                # Arbor serves one day of timetable per request and ignores every
+                # range parameter, so this is also how many extra requests each
+                # refresh costs per child.
+                vol.Required(CONF_CALENDAR_DAYS, default=days): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_CALENDAR_DAYS,
+                        max=MAX_CALENDAR_DAYS,
+                        step=1,
+                        unit_of_measurement="days",
+                        mode=NumberSelectorMode.BOX,
+                    )
+                ),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

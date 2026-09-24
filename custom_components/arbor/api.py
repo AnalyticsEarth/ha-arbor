@@ -32,6 +32,8 @@ from .http_util import (
     RESPONSE_SESSION_STALE,
     build_page_url,
     classify_response,
+    decode_body,
+    is_textual_content_type,
     normalise_base_url,
     refusal_message,
     strip_json_prefix,
@@ -223,11 +225,19 @@ class ArborClient:
                 url, data=body, headers=headers, timeout=REQUEST_TIMEOUT
             ) as response:
                 status = response.status
-                text = await response.text()
+                content_type = response.content_type
+                charset = response.charset
+                raw = await response.read()
         except TimeoutError as err:
             raise ArborConnectionError(f"Timed out posting to {path}") from err
         except aiohttp.ClientError as err:
             raise ArborConnectionError(f"Error posting to {path}: {err}") from err
+
+        if not is_textual_content_type(content_type):
+            raise ArborNotAvailableError(
+                f"Arbor answered {path} with {content_type}, which is not page data"
+            )
+        text = decode_body(raw, charset)
 
         verdict = classify_response(status, text, retried=True)
         if verdict == RESPONSE_NOT_AVAILABLE:
@@ -274,11 +284,23 @@ class ArborClient:
                 timeout=REQUEST_TIMEOUT,
             ) as response:
                 status = response.status
-                body = await response.text()
+                content_type = response.content_type
+                charset = response.charset
+                # Not `response.text()`: it raises UnicodeDecodeError on a binary
+                # body, and one such page -- Arbor links a PDF attendance
+                # certificate -- ended the whole refresh instead of being skipped.
+                raw = await response.read()
         except TimeoutError as err:
             raise ArborConnectionError(f"Timed out fetching {description}") from err
         except aiohttp.ClientError as err:
             raise ArborConnectionError(f"Error fetching {description}: {err}") from err
+
+        if not is_textual_content_type(content_type):
+            raise ArborNotAvailableError(
+                f"Arbor served {description} as {content_type}, which is a file "
+                "rather than page data"
+            )
+        body = decode_body(raw, charset)
 
         verdict = classify_response(status, body, retried=_retried)
 

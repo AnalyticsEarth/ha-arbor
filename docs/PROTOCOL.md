@@ -361,6 +361,42 @@ so it belongs in neither the numerator nor the denominator.
 Marks can only be classified by the school's own wording, so anything
 unrecognised is kept verbatim with a status of `other` rather than guessed at.
 
+### A download button is not page content
+
+The Attendance By Date page carries a PDF certificate button. Verbatim from a
+live tenant:
+
+```json
+{
+  "componentName": "Arbor.button.DownloadFile",
+  "xtype": "mis-button-download-file",
+  "props": {
+    "text": "Attendance Certificate",
+    "icon": "file-pdf",
+    "role": "download-file",
+    "pageUrl": "/guardians/student/download-attendance-certificate/student-id/<id>/academic-year-id/16"
+  }
+}
+```
+
+The caption is the innocuous "Attendance Certificate", so the action-caption
+filter does not catch it; the component's own `xtype`, `role`, `componentName`
+and `icon` all say what it is, and those are what `extract_content_urls` checks.
+A path naming a `download`/`export` segment, or ending in a file extension, is a
+backstop for a school whose component is not labelled.
+
+Following it fetched the PDF. `aiohttp`'s `response.text()` then raised
+`UnicodeDecodeError` — not one of the errors a page fetch is allowed to fail
+with, so instead of skipping one page it ended the refresh and took every
+entity for every child with it. The HTTP layer now reads bytes, refuses a
+non-textual content type as "not available", and decodes with replacement so a
+single bad byte costs one page rather than the update.
+
+**The probe hid this.** Its `_decode` used `errors="replace"`, so the same PDF
+came back as merely "unparseable JSON" while a real refresh crashed. A test
+harness that is more forgiving than the code it stands in for cannot reproduce
+what Home Assistant sees, so it now applies the same content-type check.
+
 ### KPI tiles state what they compare against
 
 Each tile in `/guardians/student/kpis/id/<id>/` carries secondary figures in its

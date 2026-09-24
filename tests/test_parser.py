@@ -1088,6 +1088,31 @@ class TestAttendanceByDate(unittest.TestCase):
         self.assertEqual(parser.extract_attendance_marks(rows), [])
 
 
+class TestDownloadLinksAreNotFollowed(unittest.TestCase):
+    """The attendance page links a PDF certificate; it must be left alone."""
+
+    def test_a_download_url_is_not_offered_as_content(self) -> None:
+        page = {
+            "type": "page",
+            "content": [
+                {
+                    "xtype": "mis-button-load-page",
+                    "props": {
+                        "pageUrl": "/guardians/student/download-attendance-certificate"
+                        "/student-id/1879/academic-year-id/16"
+                    },
+                },
+                {
+                    "xtype": "mis-button-load-page",
+                    "props": {"pageUrl": "/guardians/student-ui/overview/id/1879"},
+                },
+            ],
+        }
+        self.assertEqual(
+            parser.extract_content_urls(page), ["/guardians/student-ui/overview/id/1879"]
+        )
+
+
 class TestCurrencyIsNotReadFromAPath(unittest.TestCase):
     """Arbor's account filters are links, and a link is not a balance."""
 

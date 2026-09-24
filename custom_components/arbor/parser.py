@@ -22,6 +22,7 @@ from functools import lru_cache
 from datetime import date, datetime, time
 from typing import Any
 
+from .http_util import is_download_url
 from .models import (
     AccountBalance,
     Assignment,
@@ -477,6 +478,27 @@ def is_form_payload(tree: Any) -> bool:
 # Props through which a component names the content it loads separately.
 _CONTENT_URL_KEYS = ("url", "pageUrl", "contentUrl", "dataUrl", "contentRequestUrl")
 
+# Arbor says outright when a component downloads a file. The attendance page's
+# certificate button is
+#   xtype "mis-button-download-file", role "download-file",
+#   componentName "Arbor.button.DownloadFile", icon "file-pdf"
+# and its caption is the innocuous "Attendance Certificate", so only these say
+# what it is. Following its pageUrl fetched a PDF, and decoding a PDF as text
+# ended the whole refresh.
+_DOWNLOAD_COMPONENT_KEYS = ("xtype", "role", "componentName", "icon", "iconCls")
+
+
+def _is_download_component(node: dict[str, Any], props: dict[str, Any]) -> bool:
+    """Whether a component exists to hand the user a file."""
+    for source in (node, props):
+        for key in _DOWNLOAD_COMPONENT_KEYS:
+            value = source.get(key)
+            if isinstance(value, str) and (
+                "download" in value.casefold() or "file-pdf" in value.casefold()
+            ):
+                return True
+    return False
+
 
 def extract_content_urls(tree: Any) -> list[str]:
     """Paths of components that fetch their own content.
@@ -499,10 +521,16 @@ def extract_content_urls(tree: Any) -> list[str]:
         caption = (text_of(props.get("text")) or text_of(props.get("title")) or "").strip()
         if caption.casefold().startswith(_ACTION_CAPTION_PREFIXES):
             continue
+        # A component that hands over a file, whatever its caption says.
+        if _is_download_component(node, props):
+            continue
         for key in _CONTENT_URL_KEYS:
             url = _url_value(props.get(key))
             # Only same-tenant paths; never an absolute or protocol-relative URL.
             if url is None or not url.startswith("/") or url.startswith("//"):
+                continue
+            # Backstop for a school whose component is not labelled as a download.
+            if is_download_url(url):
                 continue
             if url in seen:
                 continue

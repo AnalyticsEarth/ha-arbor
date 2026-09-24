@@ -45,6 +45,68 @@ def says_logged_out(text: str) -> bool:
     return bool(_LOGGED_OUT_RE.search(text))
 
 
+# Path segments and file extensions that mean a URL serves a *file* rather than a
+# page of data. The Attendance By Date page links a PDF certificate at
+# /guardians/student/download-attendance-certificate/...; following it fetched a
+# PDF, and decoding a PDF as text ended the whole refresh with a
+# UnicodeDecodeError rather than skipping one page.
+_DOWNLOAD_SEGMENT_PREFIXES = ("download", "export")
+_DOWNLOAD_EXTENSIONS = (
+    ".pdf",
+    ".csv",
+    ".doc",
+    ".docx",
+    ".gif",
+    ".ics",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".svg",
+    ".xls",
+    ".xlsx",
+    ".zip",
+)
+
+
+def is_download_url(url: str) -> bool:
+    """Whether a URL serves a file rather than a page of data."""
+    path = url.split("?", 1)[0].casefold()
+    if path.endswith(_DOWNLOAD_EXTENSIONS):
+        return True
+    return any(
+        segment.startswith(_DOWNLOAD_SEGMENT_PREFIXES) for segment in path.split("/") if segment
+    )
+
+
+#: Content types a portal page or endpoint can legitimately arrive as.
+_TEXTUAL_CONTENT_TYPE_TOKENS = ("json", "javascript", "text", "xml", "html")
+
+
+def is_textual_content_type(content_type: str | None) -> bool:
+    """Whether a body is worth trying to read as text at all.
+
+    Arbor does not always state a type, and a missing one is not evidence of a
+    binary body, so the benefit of the doubt goes to reading it.
+    """
+    if not content_type:
+        return True
+    lowered = content_type.casefold()
+    return any(token in lowered for token in _TEXTUAL_CONTENT_TYPE_TOKENS)
+
+
+def decode_body(raw: bytes, charset: str | None = None) -> str:
+    """Decode a response body without letting one bad byte end a refresh.
+
+    A substituted character makes the JSON unparseable, which is reported as one
+    unreadable page; a raised ``UnicodeDecodeError`` took down every entity.
+    """
+    try:
+        return raw.decode(charset or "utf-8", errors="replace")
+    except LookupError:
+        # An encoding name the runtime does not know.
+        return raw.decode("utf-8", errors="replace")
+
+
 def normalise_base_url(raw: str) -> str:
     """Turn a school URL or bare host into a scheme-qualified origin."""
     candidate = raw.strip().rstrip("/")

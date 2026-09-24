@@ -1224,6 +1224,13 @@ STUDENT_KPIS_WITH_COMPARISONS = {
 }
 
 
+#: The PDF the Attendance By Date page links to, verbatim from a live tenant.
+ATTENDANCE_CERTIFICATE_URL = (
+    "/guardians/student/download-attendance-certificate/student-id/40219"
+    "/academic-year-id/16"
+)
+
+
 def _session_row(label: str, value: str, description: str) -> dict:
     return {
         "xtype": "mis-property-row",
@@ -1274,6 +1281,23 @@ ATTENDANCE_BY_DATE_PAGE = {
                 _session_row("03 Sep 2026 AM", "<div>Y7</div>", "Any Other Unavoidable Cause"),
                 _session_row("03 Sep 2026 PM", "<div>Y7</div>", "Any Other Unavoidable Cause"),
             ],
+        },
+        # The real page offers a PDF certificate. Verbatim from a live tenant --
+        # note the caption is the innocuous "Attendance Certificate", so nothing
+        # but the component's own labelling says it is a file.
+        {
+            "componentName": "Arbor.button.DownloadFile",
+            "xtype": "mis-button-download-file",
+            "props": {
+                "ui": "green",
+                "text": "Attendance Certificate",
+                "color": "green",
+                "icon": "file-pdf",
+                "iconCls": "mis-icon mis-icon-file-pdf",
+                "role": "download-file",
+                "pageUrl": ATTENDANCE_CERTIFICATE_URL,
+                "v2": False,
+            },
         },
     ],
 }

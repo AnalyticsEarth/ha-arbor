@@ -564,15 +564,26 @@ def _school_listing(schools: list[Any]) -> str:
 
 
 def _decode(response: Any) -> str:
-    """Read a urllib response, handling gzip and deflate."""
+    """Read a urllib response, handling gzip and deflate.
+
+    Refuses a body Arbor labels as a file, the same way the integration does.
+    Decoding a PDF with ``errors="replace"`` here made this tool *more* forgiving
+    than Home Assistant, so a page that crashed a real refresh looked merely
+    unparseable when probed -- which is how a PDF certificate link reached a
+    release.
+    """
+    content_type = response.headers.get("Content-Type")
+    if not http_util.is_textual_content_type(content_type):
+        raise ArborNotAvailableError(
+            f"Arbor served {content_type}, which is a file rather than page data"
+        )
     raw = response.read()
     encoding = (response.headers.get("Content-Encoding") or "").lower()
     if "gzip" in encoding:
         raw = gzip.decompress(raw)
     elif "deflate" in encoding:
         raw = zlib.decompress(raw, -zlib.MAX_WBITS)
-    charset = response.headers.get_content_charset() or "utf-8"
-    return raw.decode(charset, errors="replace")
+    return http_util.decode_body(raw, response.headers.get_content_charset())
 
 
 # ---------------------------------------------------------------------------

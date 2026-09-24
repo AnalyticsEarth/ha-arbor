@@ -557,6 +557,24 @@ class TestAttendanceDetail(unittest.IsolatedAsyncioTestCase):
             self.student.attendance.by_period, {"Year": 100.0, "Last 4 weeks": 96.0}
         )
 
+    def test_the_pdf_certificate_is_never_fetched(self) -> None:
+        """The page links a PDF, and a PDF is not page data.
+
+        Following it fetched the file, and decoding it as text raised
+        UnicodeDecodeError out of the HTTP layer -- which is not one of the
+        errors a page fetch is allowed to fail with, so it took down every
+        entity for every child instead of skipping one page.
+        """
+        self.assertNotIn(pages.ATTENDANCE_CERTIFICATE_URL, self.portal.requested)
+        self.assertFalse(
+            [path for path in self.portal.requested if "download" in path],
+            "no download route should be requested",
+        )
+
+    def test_the_sessions_are_still_read_from_that_page(self) -> None:
+        # Skipping the certificate must not skip the page that links it.
+        self.assertEqual(len(self.student.attendance_marks), 10)
+
     def test_last_terms_behaviour_comes_from_the_tile(self) -> None:
         # The behaviour page states this term, this year and lifetime. Only the
         # KPI tile carries the term before.

@@ -254,5 +254,64 @@ class TestLoggedOutJson(unittest.TestCase):
         self.assertFalse(http_util.says_logged_out("logged_in false"))
 
 
+class TestDownloadUrls(unittest.TestCase):
+    """A link to a file is not a link to page data."""
+
+    CERTIFICATE = (
+        "/guardians/student/download-attendance-certificate/student-id/1879"
+        "/academic-year-id/16"
+    )
+
+    def test_a_download_route_is_recognised(self) -> None:
+        # Following this fetched a PDF, and decoding a PDF as text ended the
+        # whole refresh with a UnicodeDecodeError.
+        self.assertTrue(http_util.is_download_url(self.CERTIFICATE))
+        self.assertTrue(http_util.is_download_url("/guardians/export-marks/id/4"))
+
+    def test_a_file_extension_is_recognised(self) -> None:
+        for url in ("/reports/term6.pdf", "/data/marks.CSV", "/x/y.xlsx?v=2"):
+            with self.subTest(url=url):
+                self.assertTrue(http_util.is_download_url(url))
+
+    def test_real_pages_are_not_mistaken_for_files(self) -> None:
+        for url in (
+            "/guardians/student-ui/printable-timetable/id/1879",
+            "/guardians/student-ui/attendance-by-date/student-id/1879",
+            "/guardians/behaviour-ui/student-behaviour/id/1879",
+            "/guardians/home-ui/dashboard",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(http_util.is_download_url(url))
+
+
+class TestBodyDecoding(unittest.TestCase):
+    """One unreadable page must not end a refresh."""
+
+    def test_a_binary_content_type_is_refused(self) -> None:
+        self.assertFalse(http_util.is_textual_content_type("application/pdf"))
+        self.assertFalse(http_util.is_textual_content_type("image/png"))
+
+    def test_page_content_types_are_accepted(self) -> None:
+        for content_type in (
+            "application/json",
+            "text/javascript; charset=utf-8",
+            "text/html",
+            None,  # Arbor does not always say, and silence is not evidence.
+        ):
+            with self.subTest(content_type=content_type):
+                self.assertTrue(http_util.is_textual_content_type(content_type))
+
+    def test_an_undecodable_byte_substitutes_rather_than_raises(self) -> None:
+        # 0xe2 with no valid continuation: exactly what killed the refresh.
+        body = http_util.decode_body(b'{"a": 1}\xe2\x28', "utf-8")
+        self.assertIn('{"a": 1}', body)
+
+    def test_an_unknown_charset_falls_back_to_utf8(self) -> None:
+        self.assertEqual(http_util.decode_body(b"hello", "not-a-charset"), "hello")
+
+    def test_a_missing_charset_is_utf8(self) -> None:
+        self.assertEqual(http_util.decode_body("café".encode(), None), "café")
+
+
 if __name__ == "__main__":
     unittest.main()

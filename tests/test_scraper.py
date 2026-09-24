@@ -241,6 +241,67 @@ class TestFollowsShellPagesToTheirContent(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.portal.requested), len(set(self.portal.requested)))
 
 
+class TestTheRequestBudgetActuallyStops(unittest.IsolatedAsyncioTestCase):
+    """A fan-out wider than the budget is cut off, not followed.
+
+    The other budget assertion only checks a small fixture portal stays small,
+    which it would with no budget at all. This one asks for more pages than the
+    budget allows and counts what was fetched.
+    """
+
+    FAN_OUT = 12
+
+    def _page_with_links(self, prefix: str) -> dict:
+        return {
+            "type": "page",
+            "content": [
+                {
+                    "xtype": "mis-button-load-page",
+                    "props": {"pageUrl": f"{prefix}/child-{n}", "role": "load-page"},
+                }
+                for n in range(self.FAN_OUT)
+            ],
+        }
+
+    async def asyncSetUp(self) -> None:
+        # Every path under /deep serves another page of links, so the only thing
+        # that can stop the walk is the budget or the depth limit.
+        class Branching(FakePortal):
+            def __init__(inner, outer: "TestTheRequestBudgetActuallyStops") -> None:
+                super().__init__({})
+                inner.outer = outer
+
+            async def fetch(inner, path: str) -> object:
+                inner.requested.append(path)
+                if path == "/guardians/home-ui/dashboard":
+                    return pages.SINGLE_CHILD_DASHBOARD
+                if path == "/auth/current-user-settings/format/json":
+                    return pages.CURRENT_USER_SETTINGS
+                return inner.outer._page_with_links(f"/deep{path}")
+
+        self.portal = Branching(self)
+        self.scraper = scraper_module.ArborScraper(self.portal.fetch, self.portal.fetch)
+        self.data = await self.scraper.async_scrape()
+
+    def test_the_walk_is_cut_off(self) -> None:
+        unbounded = self.FAN_OUT ** scraper_module.MAX_CONTENT_DEPTH
+        self.assertGreater(unbounded, scraper_module.MAX_REQUESTS_PER_STUDENT)
+        # A handful of requests -- the dashboard, the menu, the per-child
+        # endpoints -- sit outside the per-child budget.
+        self.assertLessEqual(
+            len(self.portal.requested), scraper_module.MAX_REQUESTS_PER_STUDENT + 10
+        )
+
+    def test_a_refresh_still_produces_a_child(self) -> None:
+        # Running out of budget drops detail; it must not drop the child.
+        self.assertEqual(list(self.data.students), ["40219"])
+
+    def test_nothing_is_fetched_twice(self) -> None:
+        self.assertEqual(
+            len(self.portal.requested), len(set(self.portal.requested))
+        )
+
+
 class TestContentFollowingIsBounded(unittest.IsolatedAsyncioTestCase):
     """A page that points at itself must not loop forever."""
 

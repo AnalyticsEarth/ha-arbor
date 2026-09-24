@@ -99,7 +99,13 @@ HOMEPAGE_CANDIDATES = (
 # Upper bound on requests per child per refresh, so an unusual portal layout
 # cannot turn one update into hundreds of requests. Covers discovered pages and
 # the content those pages load.
-MAX_REQUESTS_PER_STUDENT = 40
+#
+# A single child at one school takes about 36: every assignment that is due is a
+# page of its own, so a busy homework week pushes the count up. Exhausting the
+# budget drops detail silently rather than failing, so it wants headroom -- but
+# this is requests against a school's own Arbor tenant every scan interval, so
+# the headroom is deliberately finite.
+MAX_REQUESTS_PER_STUDENT = 60
 
 # Arbor's guardian pages return a layout whose components fetch their own
 # content, so a page has to be followed to reach any data. Two levels is enough
